@@ -8,7 +8,6 @@ const createTrip = async (passengerId, captainId, startLocation) => {
   const trip = await Trip.create({
     passengerId,
     captainId,
-    vehicleId: captain.vehicleId, // optional
     startLocation,
     status: 'pending',
   });

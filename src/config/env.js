@@ -14,6 +14,9 @@ const env = {
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
   SOCKET_CORS_ORIGIN: process.env.SOCKET_CORS_ORIGIN || '*',
   CORS_ORIGIN: process.env.CORS_ORIGIN || '*',
+  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
+  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
+  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET,
 };
 
 // Validation
