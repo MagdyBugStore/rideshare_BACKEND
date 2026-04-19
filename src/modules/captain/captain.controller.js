@@ -1,5 +1,7 @@
 const captainService = require('./captain.service');
 const { sendSuccess, sendError } = require('../../utils/response.util');
+const { generateApplicationCode } = require('../../utils/code.util');
+const Captain = require('./captain.model');
 
 const register = async (req, res, next) => {
   try {
@@ -77,6 +79,39 @@ const adminReject = async (req, res, next) => {
   }
 };
 
+const applyCaptain = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    let captain = await Captain.findOne({ userId });
+    if (captain) {
+      // إذا كان موجوداً وأعطاه كود من قبل
+      return sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus });
+    }
+    const code = generateApplicationCode();
+    captain = await Captain.create({
+      userId,
+      applicationCode: code,
+      applicationStatus: 'pending_approval',
+    });
+    sendSuccess(res, { code, status: 'pending_approval' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const checkApplicationStatus = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const captain = await Captain.findOne({ userId }).select('applicationCode applicationStatus');
+    if (!captain) return sendError(res, 'No application found', 404);
+    sendSuccess(res, {
+      code: captain.applicationCode,
+      status: captain.applicationStatus,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 module.exports = {
   register,
   uploadDocs,
@@ -85,4 +120,6 @@ module.exports = {
   toggleOnline,
   adminApprove,
   adminReject,
+  applyCaptain,
+  checkApplicationStatus,
 };

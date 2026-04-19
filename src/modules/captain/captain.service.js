@@ -1,23 +1,23 @@
 const Captain = require('./captain.model');
 const User = require('../user/user.model');
-
+// ---------- Register Captain (called from controller) ----------
 const registerCaptain = async (userId, data) => {
   const existing = await Captain.findOne({ userId });
-  if (existing) throw new Error('Captain profile already exists');
+  if (existing) throw new Error('Captain already registered');
 
   const captain = await Captain.create({
     userId,
     vehicleType: data.vehicleType,
     vehicleModel: data.vehicleModel,
     plateNumber: data.plateNumber,
+    status: 'pending_review',
   });
-
-  await User.findByIdAndUpdate(userId, { role: 'captain' });
   return captain;
 };
 
-const uploadDocuments = async (captainId, files) => {
-  const captain = await Captain.findOne({ userId: captainId });
+// ---------- Upload Documents ----------
+const uploadDocuments = async (userId, files) => {
+  const captain = await Captain.findOne({ userId });
   if (!captain) throw new Error('Captain not found');
 
   const updates = {};
@@ -29,12 +29,14 @@ const uploadDocuments = async (captainId, files) => {
   return { message: 'Documents uploaded successfully' };
 };
 
+// ---------- Get Captain Status ----------
 const getCaptainStatus = async (userId) => {
   const captain = await Captain.findOne({ userId }).select('status rejectionReason');
   if (!captain) return { status: 'not_registered' };
   return { status: captain.status, rejectionReason: captain.rejectionReason };
 };
 
+// ---------- Approve / Reject (Admin) ----------
 const approveCaptain = async (captainId, adminId) => {
   const captain = await Captain.findById(captainId);
   if (!captain) throw new Error('Captain not found');
@@ -53,7 +55,26 @@ const rejectCaptain = async (captainId, reason) => {
   return captain;
 };
 
+// ---------- Toggle Online Status ----------
+const toggleOnline = async (userId, isOnline) => {
+  const captain = await Captain.findOne({ userId });
+  if (!captain) throw new Error('Captain not found');
+  if (captain.status !== 'approved') throw new Error('Captain not approved');
+  captain.isOnline = isOnline;
+  await captain.save();
+  return captain;
+};
+
+const { generateMockDrivers } = require('../../utils/mock.util');
+
+// ---------- Nearby Drivers (Geo) ----------
 const getNearbyDrivers = async (lat, lng, radius = 3) => {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('🧪 Development mode: returning mock drivers');
+    var mockDrivers = generateMockDrivers(parseFloat(lat), parseFloat(lng));
+    return mockDrivers;
+  }
+
   const captains = await Captain.find({
     status: 'approved',
     isOnline: true,
@@ -63,30 +84,27 @@ const getNearbyDrivers = async (lat, lng, radius = 3) => {
         $maxDistance: radius * 1000,
       },
     },
-  }).populate('userId', 'name avatar').lean();
+  })
+    .populate('userId', 'name phone avatar')
+    .lean();
 
   return captains.map(c => ({
-    id: c._id,
-    userId: c.userId._id,
+    captain_id: c._id.toString(),
     name: c.userId.name,
+    phone: c.userId.phone || '',
     avatar: c.userId.avatar,
-    vehicleType: c.vehicleType,
-    vehicleModel: c.vehicleModel,
-    plateNumber: c.plateNumber,
-    rating: c.rating,
-    totalTrips: c.totalTrips,
-    location: c.location.coordinates,
+    vehicle_type: c.vehicleType,
+    vehicle_model: c.vehicleModel,
+    vehicle_color: c.vehicleColor || '',
+    plate_number: c.plateNumber,
+    lat: c.location?.coordinates?.[1] || 0,
+    lng: c.location?.coordinates?.[0] || 0,
+    status: c.isOnline ? 'available' : 'busy',
+    rating: c.rating || 0,
+    total_trips: c.totalTrips || 0,
   }));
 };
 
-const toggleOnline = async (userId, isOnline) => {
-  const captain = await Captain.findOne({ userId });
-  if (!captain) throw new Error('Captain not found');
-  if (captain.status !== 'approved') throw new Error('Captain not approved');
-  captain.isOnline = isOnline;
-  await captain.save();
-  return captain;
-};
 
 module.exports = {
   registerCaptain,

@@ -15,5 +15,8 @@ router.patch('/online', authMiddleware, requireRole('captain'), validate(toggleO
 
 router.patch('/admin/captain/:id/approve', authMiddleware, requireRole('admin'), controller.adminApprove);
 router.patch('/admin/captain/:id/reject', authMiddleware, requireRole('admin'), controller.adminReject);
-
+router.post('/apply', authMiddleware, controller.applyCaptain);
+router.get('/application/status', authMiddleware, controller.checkApplicationStatus);
+router.post('/apply', authMiddleware, controller.applyCaptain);
+router.get('/application/status', authMiddleware, controller.checkApplicationStatus);
 module.exports = router;

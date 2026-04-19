@@ -24,5 +24,23 @@ const getLiveTrips = async (req, res, next) => {
     next(error);
   }
 };
-
-module.exports = { getPendingCaptains, getLiveTrips };
+const approveCaptainByCode = async (req, res, next) => {
+  try {
+    const { code, action } = req.body; // action = 'approve' or 'reject'
+    const captain = await Captain.findOne({ applicationCode: code });
+    if (!captain) return sendError(res, 'Invalid code', 404);
+    if (action === 'approve') {
+      captain.applicationStatus = 'approved';
+      captain.status = 'approved'; // optional: make captain active directly
+    } else if (action === 'reject') {
+      captain.applicationStatus = 'rejected';
+    } else {
+      return sendError(res, 'Invalid action', 400);
+    }
+    await captain.save();
+    sendSuccess(res, { status: captain.applicationStatus });
+  } catch (error) {
+    next(error);
+  }
+};
+module.exports = { getPendingCaptains, getLiveTrips, approveCaptainByCode };

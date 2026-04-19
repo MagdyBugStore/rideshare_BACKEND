@@ -29,6 +29,12 @@ const captainSchema = new mongoose.Schema(
     },
     rating: { type: Number, min: 0, max: 5, default: 0 },
     totalTrips: { type: Number, default: 0 },
+    applicationCode: { type: String, unique: true, sparse: true },
+    applicationStatus: {
+      type: String,
+      enum: ['pending_approval', 'approved', 'rejected'],
+      default: 'pending_approval',
+    },
   },
   { timestamps: true }
 );

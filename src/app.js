@@ -8,6 +8,7 @@ const tripRoutes = require('./modules/trip/trip.routes');
 const reviewRoutes = require('./modules/review/review.routes');
 const adminRoutes = require('./modules/admin/admin.routes');
 const errorHandler = require('./middlewares/error.middleware');
+const passengerRoutes = require('./modules/passenger/passenger.routes');
 
 const app = express();
 
@@ -26,6 +27,9 @@ app.use('/api/captain', captainRoutes);
 app.use('/api/trips', tripRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/passenger', passengerRoutes); 
+app.use('/api/auth', authRoutes);
+app.use('/api/captain', captainRoutes);
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'OK' }));
 
