@@ -1,27 +1,6 @@
 const authService = require('./auth.service');
 const { sendSuccess, sendError } = require('../../utils/response.util');
-
-const sendOtp = async (req, res, next) => {
-  try {
-    const { phone } = req.body;
-    if (!phone) return sendError(res, 'Phone number required', 400);
-    await authService.sendOtp(phone);
-    sendSuccess(res, null, 'OTP sent successfully');
-  } catch (error) {
-    next(error);
-  }
-};
-
-const verifyOtp = async (req, res, next) => {
-  try {
-    const { phone, otp } = req.body;
-    if (!phone || !otp) return sendError(res, 'Phone and OTP required', 400);
-    const { user, accessToken, refreshToken } = await authService.verifyOtpAndLogin(phone, otp);
-    sendSuccess(res, { user, accessToken, refreshToken }, 'Login successful');
-  } catch (error) {
-    next(error);
-  }
-};
+const User = require('../user/user.model');
 
 const googleLogin = async (req, res, next) => {
   try {
@@ -54,11 +33,21 @@ const logout = async (req, res, next) => {
     next(error);
   }
 };
-
+const getCurrentUser = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId).select('-refreshToken');
+    if (!user) {
+      return sendError(res, 'User not found', 404);
+    }
+    sendSuccess(res, { user });
+  } catch (error) {
+    next(error);
+  }
+};
 module.exports = {
-  sendOtp,
-  verifyOtp,
   googleLogin,
   refreshToken,
   logout,
+  getCurrentUser,
 };

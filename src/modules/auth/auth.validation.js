@@ -1,13 +1,5 @@
 const Joi = require('joi');
 
-const sendOtpSchema = Joi.object({
-  phone: Joi.string().pattern(/^\+?[0-9]{10,15}$/).required(),
-});
-
-const verifyOtpSchema = Joi.object({
-  phone: Joi.string().pattern(/^\+?[0-9]{10,15}$/).required(),
-  otp: Joi.string().length(6).pattern(/^[0-9]+$/).required(),
-});
 
 const googleSchema = Joi.object({
   idToken: Joi.string().required(),
@@ -27,8 +19,6 @@ const toggleOnlineSchema = Joi.object({
 });
 
 module.exports = {
-  sendOtpSchema,
-  verifyOtpSchema,
   googleSchema,
   refreshSchema,
   registerCaptainSchema,
