@@ -65,16 +65,8 @@ const toggleOnline = async (userId, isOnline) => {
   return captain;
 };
 
-const { generateMockDrivers } = require('../../utils/mock.util');
-
 // ---------- Nearby Drivers (Geo) ----------
 const getNearbyDrivers = async (lat, lng, radius = 3) => {
-  if (process.env.NODE_ENV === 'development') {
-    console.log('🧪 Development mode: returning mock drivers');
-    var mockDrivers = generateMockDrivers(parseFloat(lat), parseFloat(lng));
-    return mockDrivers;
-  }
-
   const captains = await Captain.find({
     status: 'approved',
     isOnline: true,
@@ -104,7 +96,6 @@ const getNearbyDrivers = async (lat, lng, radius = 3) => {
     total_trips: c.totalTrips || 0,
   }));
 };
-
 
 module.exports = {
   registerCaptain,

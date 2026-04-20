@@ -36,12 +36,31 @@ const getStatus = async (req, res, next) => {
 };
 
 const getNearbyDrivers = async (req, res, next) => {
-  try {
-    const { lat, lng, radius = 3 } = req.query;
-    const drivers = await captainService.getNearbyDrivers(parseFloat(lat), parseFloat(lng), parseFloat(radius));
-    sendSuccess(res, drivers);
-  } catch (error) {
-    next(error);
+  if (process.env.NODE_ENV === 'development') {
+    
+    console.log('🧪 Development mode: returning real mock captains from DB');
+    const captains = await Captain.find({
+      status: 'approved',
+      isOnline: true,
+    })
+      .populate('userId', 'name phone avatar')
+      .lean();
+
+    return captains.map(c => ({
+      captain_id: c._id.toString(),
+      name: c.userId.name,
+      phone: c.userId.phone || '',
+      avatar: c.userId.avatar,
+      vehicle_type: c.vehicleType,
+      vehicle_model: c.vehicleModel,
+      vehicle_color: c.vehicleColor || '',
+      plate_number: c.plateNumber,
+      lat: c.location?.coordinates?.[1] || lat,
+      lng: c.location?.coordinates?.[0] || lng,
+      status: c.isOnline ? 'available' : 'busy',
+      rating: c.rating || 0,
+      total_trips: c.totalTrips || 0,
+    }));
   }
 };
 

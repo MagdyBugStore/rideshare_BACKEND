@@ -2,9 +2,8 @@ const app = require('./app');
 const connectDB = require('./config/db');
 const env = require('./config/env');
 const { initSocket } = require('./socket');
-const os = require('os'); // استيراد موديل os
+const os = require('os'); 
 
-// دالة لجلب الـ IP الداخلي للجهاز
 const getLocalExternalIP = () => {
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
@@ -19,14 +18,14 @@ const getLocalExternalIP = () => {
 };
 
 const startServer = async () => {
-  await connectDB();
+    await connectDB();
   const server = app.listen(env.PORT, '0.0.0.0', () => { // '0.0.0.0' بتسمح للجهاز يستقبل اتصالات من بره الـ localhost
-    const ip = getLocalExternalIP();
-    console.log(`🚀 Server running on:`);
-    console.log(`   🏠 Local:   http://localhost:${env.PORT}`);
-    console.log(`   🌐 Network: http://${ip}:${env.PORT}`);
-  });
-  initSocket(server);
+        const ip = getLocalExternalIP();
+        console.log(`🚀 Server running on:`);
+        console.log(`   🏠 Local:   http://localhost:${env.PORT}`);
+        console.log(`   🌐 Network: http://${ip}:${env.PORT}`);
+    });
+    initSocket(server);
 };
 
 startServer();

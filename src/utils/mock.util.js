@@ -1,3 +1,11 @@
+const mongoose = require('mongoose');
+
+// دالة لتوليد أرقام شبه عشوائية مع بذرة ثابتة
+const seededRandom = (seed) => {
+  const x = Math.sin(seed) * 10000;
+  return x - Math.floor(x);
+};
+
 const generateMockDrivers = (centerLat, centerLng) => {
   const drivers = [];
   const names = [
@@ -20,24 +28,18 @@ const generateMockDrivers = (centerLat, centerLng) => {
   const vehicleTypes = ['car', 'motorcycle', 'tukutuk', 'alt_tukutuk'];
   const statuses = ['available', 'busy', 'delivering'];
 
-  // استخدام بذرة ثابتة للأرقام العشوائية للحصول على نتائج متسقة
-  const seededRandom = (seed) => {
-    const x = Math.sin(seed) * 10000;
-    return x - Math.floor(x);
-  };
-
   for (let i = 0; i < 15; i++) {
     const seed = i * 42;
     const latOffset = (seededRandom(seed) - 0.5) * 0.04;
     const lngOffset = (seededRandom(seed + 1) - 0.5) * 0.04;
-    
+
     const vehicleType = vehicleTypes[Math.floor(seededRandom(seed + 2) * vehicleTypes.length)];
     const status = statuses[Math.floor(seededRandom(seed + 3) * statuses.length)];
     const rating = 3.5 + seededRandom(seed + 4) * 1.5;
     const totalTrips = Math.floor(seededRandom(seed + 5) * 300) + 10;
 
     drivers.push({
-      captain_id: `capt_${1000 + i}`,
+      captain_id: new mongoose.Types.ObjectId().toString(), // ObjectId صالح
       name: names[i % names.length],
       phone: phones[i % phones.length],
       vehicle_type: vehicleType,
