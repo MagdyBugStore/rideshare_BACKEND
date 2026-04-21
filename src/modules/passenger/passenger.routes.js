@@ -7,7 +7,7 @@ const { requireRole } = require('../../middlewares/role.middleware');
 router.get(
   '/drivers/nearby',
   authMiddleware,
-  requireRole('passenger'),
+  requireRole('passenger', 'captain'), 
   controller.getNearbyDrivers
 );
 
