@@ -12,6 +12,7 @@ router.post('/documents', authMiddleware, uploadDocuments, controller.uploadDocs
 router.get('/status', authMiddleware, controller.getStatus);
 router.get('/nearby', authMiddleware, requireRole('passenger'), controller.getNearbyDrivers);
 router.patch('/online', authMiddleware, requireRole('captain'), validate(toggleOnlineSchema), controller.toggleOnline);
+router.post('/location', authMiddleware, requireRole('captain'), controller.updateLocation);
 
 router.patch('/admin/captain/:id/approve', authMiddleware, requireRole('admin'), controller.adminApprove);
 router.patch('/admin/captain/:id/reject', authMiddleware, requireRole('admin'), controller.adminReject);

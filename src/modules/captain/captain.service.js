@@ -98,6 +98,13 @@ const getNearbyDrivers = async (lat, lng, radius = 3) => {
     total_trips: c.totalTrips || 0,
   }));
 };
+const updateLocation = async (userId, lat, lng) => {
+  const captain = await Captain.findOne({ userId });
+  if (!captain) throw new Error('Captain not found');
+  captain.location = { type: 'Point', coordinates: [lng, lat] };
+  captain.lastLocationAt = new Date();
+  await captain.save();
+};
 
 module.exports = {
   registerCaptain,
@@ -107,4 +114,5 @@ module.exports = {
   rejectCaptain,
   getNearbyDrivers,
   toggleOnline,
+  updateLocation
 };

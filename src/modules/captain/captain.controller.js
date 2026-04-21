@@ -161,6 +161,19 @@ const checkApplicationStatus = async (req, res, next) => {
     next(error);
   }
 };
+
+const updateLocation = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { lat, lng } = req.body;
+    await captainService.updateLocation(userId, lat, lng);
+    sendSuccess(res, null, 'Location updated');
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 module.exports = {
   register,
   uploadDocs,
@@ -171,4 +184,5 @@ module.exports = {
   adminReject,
   applyCaptain,
   checkApplicationStatus,
+  updateLocation
 };
