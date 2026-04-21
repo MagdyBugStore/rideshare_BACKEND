@@ -52,7 +52,7 @@ const verifyGoogle = async (idToken) => {
       email,
       name,
       avatar: picture,
-      role: 'passenger',  // ✅ تصحيح: 'passenger' وليس 'player'
+      role: null
     });
   } else if (!user.googleId) {
     user.googleId = googleId;

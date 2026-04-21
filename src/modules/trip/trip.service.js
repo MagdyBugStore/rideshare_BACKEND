@@ -1,9 +1,8 @@
 const Trip = require('./trip.model');
 const Captain = require('../captain/captain.model');
 const { calcFare } = require('../../utils/fare.util');
-const { emitToTrip } = require('../../socket'); // ✅ استيراد دالة الإشعار
+const { emitToTrip } = require('../../socket'); 
 const mongoose = require('mongoose');
-
 
 const createTrip = async (passengerId, captainId, startLocation) => {
   if (!mongoose.Types.ObjectId.isValid(captainId)) {

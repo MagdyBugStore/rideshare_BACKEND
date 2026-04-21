@@ -43,6 +43,8 @@ const approveCaptain = async (captainId, adminId) => {
   captain.status = 'approved';
   captain.rejectionReason = null;
   await captain.save();
+  await User.findByIdAndUpdate(captain.userId, { role: 'captain' });
+
   return captain;
 };
 

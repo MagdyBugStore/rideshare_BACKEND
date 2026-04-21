@@ -17,10 +17,13 @@ const registerCaptainSchema = Joi.object({
 const toggleOnlineSchema = Joi.object({
   isOnline: Joi.boolean().required(),
 });
-
+const updateRoleSchema = Joi.object({
+  role: Joi.string().valid('passenger', 'captain').required(),
+});
 module.exports = {
   googleSchema,
   refreshSchema,
   registerCaptainSchema,
   toggleOnlineSchema,
+  updateRoleSchema,
 };

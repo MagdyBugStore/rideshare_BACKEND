@@ -1,6 +1,10 @@
 const authService = require('./auth.service');
 const { sendSuccess, sendError } = require('../../utils/response.util');
 const User = require('../user/user.model');
+const { generateApplicationCode } = require('../../utils/code.util');
+const Captain = require('../captain/captain.model');
+
+
 
 const googleLogin = async (req, res, next) => {
   try {
@@ -40,7 +44,54 @@ const getCurrentUser = async (req, res, next) => {
     if (!user) {
       return sendError(res, 'User not found', 404);
     }
-    sendSuccess(res, { user });
+
+    let captain = null;
+    if (user.role === 'captain') {
+      captain = await Captain.findOne({ userId: user._id }).select('status isOnline applicationStatus rejectionReason vehicleType vehicleModel plateNumber vehicleColor');
+    }
+
+    sendSuccess(res, { user, captain });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateUserRole = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { role } = req.body;
+
+    if (!['passenger', 'captain'].includes(role)) {
+      return sendError(res, 'دور غير صالح', 400);
+    }
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { role },
+      { new: true, runValidators: true }
+    ).select('-refreshToken -otpCode -otpExpiresAt');
+
+    if (!user) {
+      return sendError(res, 'المستخدم غير موجود', 404);
+    }
+
+    // إذا اختار كابتن، أنشئ له applicationCode
+    let applicationCode = null;
+    if (role === 'captain') {
+      const existingCaptain = await Captain.findOne({ userId: user._id });
+      if (!existingCaptain) {
+        const code = generateApplicationCode();
+        await Captain.create({
+          userId: user._id,
+          applicationCode: code,
+          applicationStatus: 'pending_approval',
+          status: 'pending_review',
+        });
+        applicationCode = code;
+      }
+    }
+
+    sendSuccess(res, { user, applicationCode }, 'تم تحديث الدور بنجاح');
   } catch (error) {
     next(error);
   }
@@ -50,4 +101,5 @@ module.exports = {
   refreshToken,
   logout,
   getCurrentUser,
+  updateUserRole,
 };

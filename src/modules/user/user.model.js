@@ -7,8 +7,8 @@ const userSchema = new mongoose.Schema(
     email: { type: String, lowercase: true, unique: true, sparse: true },
     role: {
       type: String,
-      enum: ['passenger', 'captain', 'admin'],
-      default: 'passenger',
+      enum: ['passenger', 'captain', 'admin', null],
+      default: null,
     },
     googleId: { type: String, unique: true, sparse: true },
     avatar: { type: String }, // URL

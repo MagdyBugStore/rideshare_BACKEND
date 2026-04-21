@@ -37,8 +37,7 @@ const getStatus = async (req, res, next) => {
 
 const getNearbyDrivers = async (req, res, next) => {
   if (process.env.NODE_ENV === 'development') {
-    
-    console.log('🧪 Development mode: returning real mock captains from DB');
+    const { lat, lng } = req.query;
     const captains = await Captain.find({
       status: 'approved',
       isOnline: true,
@@ -101,18 +100,49 @@ const adminReject = async (req, res, next) => {
 const applyCaptain = async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const { vehicleType, vehicleModel, plateNumber, vehicleColor } = req.body;
+
+    // البحث عن سجل كابتن موجود للمستخدم
     let captain = await Captain.findOne({ userId });
-    if (captain) {
-      // إذا كان موجوداً وأعطاه كود من قبل
-      return sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus });
+
+    if (!captain) {
+      // إنشاء سجل جديد مع كود التطبيق
+      const code = generateApplicationCode();
+      captain = await Captain.create({
+        userId,
+        applicationCode: code,
+        applicationStatus: 'pending_approval',
+        status: 'pending_review',
+        vehicleType: vehicleType || undefined,
+        vehicleModel: vehicleModel || undefined,
+        plateNumber: plateNumber || undefined,
+        vehicleColor: vehicleColor || undefined,
+      });
+      return sendSuccess(res, {
+        code: captain.applicationCode,
+        status: captain.applicationStatus,
+      }, 'تم إنشاء طلب الكابتن بنجاح', 201);
     }
-    const code = generateApplicationCode();
-    captain = await Captain.create({
-      userId,
-      applicationCode: code,
-      applicationStatus: 'pending_approval',
-    });
-    sendSuccess(res, { code, status: 'pending_approval' });
+
+    // إذا كان السجل موجوداً، نقوم بتحديثه
+    if (vehicleType) captain.vehicleType = vehicleType;
+    if (vehicleModel) captain.vehicleModel = vehicleModel;
+    if (plateNumber) captain.plateNumber = plateNumber;
+    if (vehicleColor) captain.vehicleColor = vehicleColor;
+
+    // تحديث حالة الطلب إلى pending_review إذا كان في مرحلة التقديم
+    if (captain.applicationStatus === 'pending_approval') {
+      captain.status = 'pending_review';
+    }
+
+    await captain.save();
+
+    sendSuccess(res, {
+      code: captain.applicationCode,
+      status: captain.applicationStatus,
+      vehicleInfoUpdated: true,
+    }, 'تم تحديث بيانات الكابتن بنجاح');
+
   } catch (error) {
     next(error);
   }
