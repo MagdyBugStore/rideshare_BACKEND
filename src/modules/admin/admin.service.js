@@ -135,6 +135,7 @@ const approveCaptain = async (captainId) => {
   if (!captain) throw new Error('الكابتن غير موجود');
 
   captain.status = 'approved';
+  captain.applicationStatus = 'approved';
   captain.rejectionReason = null;
   await captain.save();
 

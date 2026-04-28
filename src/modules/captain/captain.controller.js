@@ -102,11 +102,9 @@ const applyCaptain = async (req, res, next) => {
     const userId = req.user.id;
     const { vehicleType, vehicleModel, plateNumber, vehicleColor } = req.body;
 
-    // البحث عن سجل كابتن موجود للمستخدم
     let captain = await Captain.findOne({ userId });
 
     if (!captain) {
-      // إنشاء سجل جديد مع كود التطبيق
       const code = generateApplicationCode();
       captain = await Captain.create({
         userId,
@@ -124,14 +122,12 @@ const applyCaptain = async (req, res, next) => {
       }, 'تم إنشاء طلب الكابتن بنجاح', 201);
     }
 
-    // إذا كان السجل موجوداً، نقوم بتحديثه
     if (vehicleType) captain.vehicleType = vehicleType;
     if (vehicleModel) captain.vehicleModel = vehicleModel;
     if (plateNumber) captain.plateNumber = plateNumber;
     if (vehicleColor) captain.vehicleColor = vehicleColor;
 
-    // تحديث حالة الطلب إلى pending_review إذا كان في مرحلة التقديم
-    if (captain.applicationStatus === 'pending_approval') {
+    if (captain.applicationStatus === 'pending_approval' && captain.status !== 'approved') {
       captain.status = 'pending_review';
     }
 

@@ -3,7 +3,7 @@ const { sendSuccess, sendError } = require('../../utils/response.util');
 const User = require('../user/user.model');
 const { generateApplicationCode } = require('../../utils/code.util');
 const Captain = require('../captain/captain.model');
-
+const { generateTokens } = require('../../utils/jwt.util');
 
 
 const googleLogin = async (req, res, next) => {
@@ -91,7 +91,10 @@ const updateUserRole = async (req, res, next) => {
       }
     }
 
-    sendSuccess(res, { user, applicationCode }, 'تم تحديث الدور بنجاح');
+    const tokens = generateTokens(user._id, user.role);
+    user.refreshToken = tokens.refreshToken;
+    await user.save();
+    sendSuccess(res, { user, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, applicationCode }, 'تم تحديث الدور');
   } catch (error) {
     next(error);
   }
