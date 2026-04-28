@@ -20,10 +20,16 @@ const toggleOnlineSchema = Joi.object({
 const updateRoleSchema = Joi.object({
   role: Joi.string().valid('passenger', 'captain').required(),
 });
+const profileUpdateSchema = Joi.object({
+  name: Joi.string().min(2),
+  phone: Joi.string().regex(/^01[0-9]{9}$/),
+});
+
 module.exports = {
   googleSchema,
   refreshSchema,
   registerCaptainSchema,
   toggleOnlineSchema,
   updateRoleSchema,
+  profileUpdateSchema
 };

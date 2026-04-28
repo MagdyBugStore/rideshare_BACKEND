@@ -1,7 +1,7 @@
 const { sendError } = require('../utils/response.util');
 
 const errorHandler = (err, req, res, next) => {
-  console.error('❌ Error:', err.stack);
+  console.error('❌ Error:', err.stack );
 
   // Mongoose duplicate key
   if (err.code === 11000) {

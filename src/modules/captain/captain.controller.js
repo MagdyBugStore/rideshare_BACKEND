@@ -173,6 +173,54 @@ const updateLocation = async (req, res, next) => {
   }
 };
 
+const uploadSingleDoc = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { type } = req.params;
+
+    // التحقق من النوع (مهم)
+    const allowedTypes = ['nationalId', 'driverLicense', 'vehicleLicense'];
+    if (!allowedTypes.includes(type)) {
+      return sendError(res, 'نوع المستند غير صالح', 400);
+    }
+
+    const documentUrl = req.file.path;
+
+    const captain = await captainService.updateSingleDocument(userId, type, documentUrl);
+
+    sendSuccess(res, {
+      field: type,
+      url: documentUrl,
+    }, 'تم رفع المستند بنجاح');
+  } catch (error) {
+    next(error);
+  }
+};
+const updatePersonal = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { nationalId, address, governorate, dateOfBirth } = req.body;
+    const captain = await captainService.updateCaptainPersonal(userId, {
+      nationalId, address, governorate, dateOfBirth
+    });
+    sendSuccess(res, captain, 'تم تحديث البيانات الشخصية');
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateVehicle = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { vehicleType, vehicleModel, plateNumber, vehicleColor, passengerCapacity } = req.body;
+    const captain = await captainService.updateCaptainVehicle(userId, {
+      vehicleType, vehicleModel, plateNumber, vehicleColor, passengerCapacity
+    });
+    sendSuccess(res, captain, 'تم تحديث بيانات المركبة');
+  } catch (error) {
+    next(error);
+  }
+};
 
 module.exports = {
   register,
@@ -184,5 +232,9 @@ module.exports = {
   adminReject,
   applyCaptain,
   checkApplicationStatus,
-  updateLocation
+  updateLocation,
+  uploadSingleDoc,
+  updatePersonal,
+  updatePersonal,
+  updateVehicle,
 };

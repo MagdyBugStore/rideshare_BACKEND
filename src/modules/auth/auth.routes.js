@@ -10,5 +10,6 @@ router.post('/google', validate(validation.googleSchema), controller.googleLogin
 router.post('/refresh-token', validate(validation.refreshSchema), controller.refreshToken);
 router.post('/logout', authMiddleware, controller.logout);
 router.get('/me', authMiddleware, controller.getCurrentUser);
+router.patch('/me', authMiddleware, validate(validation.profileUpdateSchema), controller.updateProfile);
 router.patch('/role', authMiddleware, validate(validation.updateRoleSchema), controller.updateUserRole);
 module.exports = router;

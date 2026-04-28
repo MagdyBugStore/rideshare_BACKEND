@@ -6,6 +6,7 @@ const { requireRole } = require('../../middlewares/role.middleware');
 const { uploadDocuments } = require('../../middlewares/upload.middleware');
 const { validate } = require('../../middlewares/validate');
 const { registerCaptainSchema, toggleOnlineSchema } = require('../auth/auth.validation');
+const uploadSingle = require('../../middlewares/upload.middleware').uploadSingleDocument;
 
 router.post('/register', authMiddleware, validate(registerCaptainSchema), controller.register);
 router.post('/documents', authMiddleware, uploadDocuments, controller.uploadDocs);
@@ -20,4 +21,9 @@ router.post('/apply', authMiddleware, controller.applyCaptain);
 router.get('/application/status', authMiddleware, controller.checkApplicationStatus);
 router.post('/apply', authMiddleware, controller.applyCaptain);
 router.get('/application/status', authMiddleware, controller.checkApplicationStatus);
+router.post('/documents/:type', authMiddleware, uploadSingle, controller.uploadSingleDoc);
+router.post('/documents', authMiddleware, uploadDocuments, controller.uploadDocs);
+router.patch('/personal', authMiddleware, controller.updatePersonal);
+router.patch('/vehicle', authMiddleware, controller.updateVehicle);
+
 module.exports = router;

@@ -105,7 +105,31 @@ const updateLocation = async (userId, lat, lng) => {
   captain.lastLocationAt = new Date();
   await captain.save();
 };
+// أضف هذه الدالة
+const updateSingleDocument = async (userId, type, fileUrl) => {
+  const captain = await Captain.findOne({ userId });
+  if (!captain) throw new Error('الكابتن غير موجود');
 
+  // تحديث الحقل المحدد في documents
+  captain.documents[type] = fileUrl;
+  await captain.save();
+  return captain;
+};
+const updateCaptainPersonal = async (userId, personalData) => {
+  let captain = await Captain.findOne({ userId });
+  if (!captain) throw new Error('لم يتم إنشاء حساب كابتن بعد');
+  Object.assign(captain, personalData);
+  await captain.save();
+  return captain;
+};
+
+const updateCaptainVehicle = async (userId, vehicleData) => {
+  let captain = await Captain.findOne({ userId });
+  if (!captain) throw new Error('لم يتم إنشاء حساب كابتن بعد');
+  Object.assign(captain, vehicleData);
+  await captain.save();
+  return captain;
+};
 module.exports = {
   registerCaptain,
   uploadDocuments,
@@ -114,5 +138,8 @@ module.exports = {
   rejectCaptain,
   getNearbyDrivers,
   toggleOnline,
-  updateLocation
+  updateSingleDocument,
+  updateLocation,
+  updateCaptainPersonal,
+  updateCaptainVehicle
 };

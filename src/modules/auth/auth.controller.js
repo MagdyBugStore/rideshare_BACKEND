@@ -96,10 +96,24 @@ const updateUserRole = async (req, res, next) => {
     next(error);
   }
 };
+const updateProfile = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { name, phone } = req.body;
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $set: { name, phone } },
+      { new: true }
+    ).select('-refreshToken');
+    sendSuccess(res, user, 'Profile updated');
+  } catch (error) { next(error); }
+};
+
 module.exports = {
   googleLogin,
   refreshToken,
   logout,
   getCurrentUser,
   updateUserRole,
+  updateProfile
 };

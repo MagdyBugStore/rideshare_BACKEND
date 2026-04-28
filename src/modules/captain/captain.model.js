@@ -13,7 +13,6 @@ const captainSchema = new mongoose.Schema(
     vehicleType: {
       type: String,
       enum: ['car', 'motorcycle', 'tukutuk', 'alt_tukutuk'],
-      // غير مطلوب في مرحلة التقديم الأولى
     },
     vehicleModel: {
       type: String,
@@ -22,7 +21,7 @@ const captainSchema = new mongoose.Schema(
     plateNumber: {
       type: String,
       unique: true,
-      sparse: true, // ✅ يسمح بوجود مستندات بدون هذا الحقل نهائياً
+      sparse: true,
     },
     vehicleColor: {
       type: String,
@@ -34,6 +33,9 @@ const captainSchema = new mongoose.Schema(
       nationalId: String,
       driverLicense: String,
       vehicleLicense: String,
+      governorate: String,
+      address: String,
+      dateOfBirth: { type: String },
     },
     status: {
       type: String,
@@ -62,7 +64,7 @@ const captainSchema = new mongoose.Schema(
     applicationCode: {
       type: String,
       unique: true,
-      sparse: true, 
+      sparse: true,
     },
     applicationStatus: {
       type: String,
