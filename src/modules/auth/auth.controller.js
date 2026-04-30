@@ -75,7 +75,6 @@ const updateUserRole = async (req, res, next) => {
       return sendError(res, 'المستخدم غير موجود', 404);
     }
 
-    // إذا اختار كابتن، أنشئ له applicationCode
     let applicationCode = null;
     if (role === 'captain') {
       const existingCaptain = await Captain.findOne({ userId: user._id });
@@ -94,7 +93,13 @@ const updateUserRole = async (req, res, next) => {
     const tokens = generateTokens(user._id, user.role);
     user.refreshToken = tokens.refreshToken;
     await user.save();
-    sendSuccess(res, { user, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, applicationCode }, 'تم تحديث الدور');
+
+    sendSuccess(res, {
+      user,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      applicationCode
+    }, 'تم تحديث الدور');
   } catch (error) {
     next(error);
   }
