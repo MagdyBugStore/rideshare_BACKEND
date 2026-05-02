@@ -11,6 +11,7 @@ router.post('/send-otp',    otpLimiter, validate(validation.sendOtpSchema),   co
 router.post('/verify-otp',  validate(validation.verifyOtpSchema),  controller.verifyOtp);
 router.post('/refresh-token', validate(validation.refreshSchema),  controller.refreshToken);
 router.post('/logout',      authMiddleware,                        controller.logout);
+router.post('/avatar',      authMiddleware,                        controller.uploadAvatar);
 router.get('/me',           authMiddleware,                        controller.getCurrentUser);
 router.patch('/me',         authMiddleware, validate(validation.profileUpdateSchema), controller.updateProfile);
 router.patch('/role',       authMiddleware, validate(validation.updateRoleSchema),    controller.updateUserRole);

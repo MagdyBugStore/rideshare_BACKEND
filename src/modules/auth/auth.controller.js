@@ -4,6 +4,7 @@ const Captain = require('../captain/captain.model');
 const { generateTokens } = require('../../utils/jwt.util');
 const { generateApplicationCode } = require('../../utils/code.util');
 const { sendSuccess, sendError } = require('../../utils/response.util');
+const { uploadSingleDocument } = require('../../middlewares/upload.middleware');
 
 const wrap = (fn) => async (req, res, next) => {
   try { await fn(req, res, next); } catch (err) { next(err); }
@@ -24,7 +25,7 @@ const refreshToken = wrap(async (req, res) => {
 });
 
 const logout = wrap(async (req, res) => {
-  await authService.logout(req.user.id);
+  await authService.logout(req.user.id, req.body?.refreshToken);
   sendSuccess(res, null, 'Logged out successfully');
 });
 
@@ -92,6 +93,19 @@ const updateProfile = wrap(async (req, res) => {
   sendSuccess(res, user, 'Profile updated');
 });
 
+const uploadAvatar = (req, res, next) => {
+  uploadSingleDocument(req, res, async (err) => {
+    if (err) return sendError(res, err.message, 400);
+    if (!req.file) return sendError(res, 'No file uploaded', 400);
+    try {
+      const user = await userRepo.updateById(req.user.id, { avatar: req.file.path });
+      sendSuccess(res, { avatar: req.file.path }, 'Avatar updated');
+    } catch (e) {
+      next(e);
+    }
+  });
+};
+
 const sendOtp = wrap(async (req, res) => {
   const result = await authService.sendOtp(req.body.phone);
   sendSuccess(res, result, 'OTP sent');
@@ -102,4 +116,4 @@ const verifyOtp = wrap(async (req, res) => {
   sendSuccess(res, result, 'Login successful');
 });
 
-module.exports = { googleLogin, sendOtp, verifyOtp, refreshToken, logout, getCurrentUser, updateUserRole, updateProfile };
+module.exports = { googleLogin, sendOtp, verifyOtp, refreshToken, logout, getCurrentUser, updateUserRole, updateProfile, uploadAvatar };

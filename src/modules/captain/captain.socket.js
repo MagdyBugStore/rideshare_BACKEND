@@ -18,8 +18,14 @@ const register = (io, socket) => {
         return socket.emit('error', { code: 'NOT_APPROVED', message: 'Captain not approved' });
       }
 
+      // Profile completeness gate
+      if (!captain.vehicleType || !captain.vehicleModel || !captain.plateNumber) {
+        return socket.emit('error', { code: 'PROFILE_INCOMPLETE', message: 'Complete your vehicle profile first' });
+      }
+
       captain.isOnline = true;
       captain.socketId = socket.id;
+      captain.lastActiveAt = new Date();
       await captainRepo.saveDoc(captain);
 
       // Cache Captain._id on socket for fast access in location updates
@@ -79,8 +85,12 @@ async function _setOffline(userId, socket) {
     const captain = await captainRepo.findByUserId(userId);
     if (!captain || !captain.isOnline) return;
 
+    // Guard against duplicate-socket race: a newer socket may have taken over
+    if (captain.socketId && captain.socketId !== socket.id) return;
+
     captain.isOnline = false;
     captain.socketId = null;
+    captain.lastActiveAt = new Date();
     await captainRepo.saveDoc(captain);
 
     // Use socket.to instead of emitToPassengers so the emitter excludes itself

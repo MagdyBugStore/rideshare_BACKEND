@@ -428,43 +428,45 @@
 2 const cors = require('cors');
 3 const helmet = require('helmet');
 4 const morgan = require('morgan');
-5 const authRoutes = require('./modules/auth/auth.routes');
-6 const captainRoutes = require('./modules/captain/captain.routes');
-7 const tripRoutes = require('./modules/trip/trip.routes');
-8 const reviewRoutes = require('./modules/review/review.routes');
-9 const adminRoutes = require('./modules/admin/admin.routes');
-10 const errorHandler = require('./middlewares/error.middleware');
-11 const passengerRoutes = require('./modules/passenger/passenger.routes');
-12 const fareRoutes = require('./modules/fare/fare.routes');
-13 const seedRoutes = require('./modules/seed/seed.routes');
-14 const app = express();
-15 
-16 // Middlewares
-17 app.use(helmet());
-18 app.use(cors({
-19   origin: process.env.CORS_ORIGIN?.split(',') || '*',
-20   credentials: true,
-21 }));
-22 app.use(express.json());
-23 app.use(morgan('dev'));
-24 
-25 // Routes
-26 app.use('/api/auth', authRoutes);
-27 app.use('/api/captain', captainRoutes);
-28 app.use('/api/trips', tripRoutes);
-29 app.use('/api/reviews', reviewRoutes);
-30 app.use('/api/admin', adminRoutes);
-31 app.use('/api/passenger', passengerRoutes); 
-32 app.use('/api/auth', authRoutes);
-33 app.use('/api/captain', captainRoutes);
-34 app.use('/api/fares', fareRoutes);
-35 app.use('/api/seed', seedRoutes);
-36 
-37 app.get('/health', (req, res) => res.status(200).json({ status: 'OK' }));
-38 
-39 app.use(errorHandler);
-40 
-41 module.exports = app;
+5 const errorHandler = require('./middlewares/error.middleware');
+6 
+7 // Routes
+8 const authRoutes      = require('./modules/auth/auth.routes');
+9 const captainRoutes   = require('./modules/captain/captain.routes');
+10 const tripRoutes      = require('./modules/trip/trip.routes');
+11 const reviewRoutes    = require('./modules/review/review.routes');
+12 const adminRoutes     = require('./modules/admin/admin.routes');
+13 const passengerRoutes = require('./modules/passenger/passenger.routes');
+14 const fareRoutes      = require('./modules/fare/fare.routes');
+15 const seedRoutes      = require('./modules/seed/seed.routes');
+16 
+17 const app = express();
+18 
+19 // ── Global middlewares ────────────────────────────────────────────────
+20 app.use(helmet());
+21 app.use(cors({
+22   origin: process.env.CORS_ORIGIN?.split(',') ?? '*',
+23   credentials: true,
+24 }));
+25 app.use(express.json());
+26 app.use(morgan('dev'));
+27 
+28 // ── Routes ────────────────────────────────────────────────────────────
+29 app.use('/api/auth',      authRoutes);
+30 app.use('/api/captain',   captainRoutes);
+31 app.use('/api/trips',     tripRoutes);
+32 app.use('/api/reviews',   reviewRoutes);
+33 app.use('/api/admin',     adminRoutes);
+34 app.use('/api/passenger', passengerRoutes);
+35 app.use('/api/fares',     fareRoutes);
+36 app.use('/api/seed',      seedRoutes);
+37 
+38 app.get('/health', (_req, res) => res.json({ status: 'OK', timestamp: new Date().toISOString() }));
+39 
+40 // ── Error handler (must be last) ──────────────────────────────────────
+41 app.use(errorHandler);
+42 
+43 module.exports = app;
 ```
 
 ## File: `src\server.js`
@@ -548,8 +550,8 @@
 6   MONGO_URI: process.env.MONGO_URI,
 7   JWT_SECRET: process.env.JWT_SECRET,
 8   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
-9   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '30d',
-10   JWT_REFRESH_EXPIRES_IN: process.env.JWT_REFRESH_EXPIRES_IN || '60d',
+9   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '15m',
+10   JWT_REFRESH_EXPIRES_IN: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
 11   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
 12   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
 13   TWILIO_PHONE: process.env.TWILIO_PHONE,
@@ -1297,132 +1299,168 @@
 
 ```javascript
 1 const authService = require('./auth.service');
-2 const { sendSuccess, sendError } = require('../../utils/response.util');
-3 const User = require('../user/user.model');
-4 const { generateApplicationCode } = require('../../utils/code.util');
-5 const Captain = require('../captain/captain.model');
-6 const { generateTokens } = require('../../utils/jwt.util');
-7 
+2 const userRepo = require('../user/user.repository');
+3 const Captain = require('../captain/captain.model');
+4 const { generateTokens } = require('../../utils/jwt.util');
+5 const { generateApplicationCode } = require('../../utils/code.util');
+6 const { sendSuccess, sendError } = require('../../utils/response.util');
+7 const { uploadSingleDocument } = require('../../middlewares/upload.middleware');
 8 
-9 const googleLogin = async (req, res, next) => {
-10   try {
-11     const { idToken } = req.body;
-12     if (!idToken) return sendError(res, 'idToken required', 400);
-13     const { user, accessToken, refreshToken } = await authService.verifyGoogle(idToken);
-14     sendSuccess(res, { user, accessToken, refreshToken }, 'Google login successful');
-15   } catch (error) {
-16     next(error);
-17   }
-18 };
+9 const wrap = (fn) => async (req, res, next) => {
+10   try { await fn(req, res, next); } catch (err) { next(err); }
+11 };
+12 
+13 const googleLogin = wrap(async (req, res) => {
+14   const { idToken } = req.body;
+15   if (!idToken) return sendError(res, 'idToken required', 400);
+16   const result = await authService.loginWithGoogle(idToken);
+17   sendSuccess(res, result, 'Google login successful');
+18 });
 19 
-20 const refreshToken = async (req, res, next) => {
-21   try {
-22     const { refreshToken } = req.body;
-23     if (!refreshToken) return sendError(res, 'Refresh token required', 400);
-24     const { accessToken } = await authService.refreshAccessToken(refreshToken);
-25     sendSuccess(res, { accessToken }, 'Token refreshed');
-26   } catch (error) {
-27     next(error);
-28   }
-29 };
-30 
-31 const logout = async (req, res, next) => {
-32   try {
-33     const userId = req.user.id; // from auth middleware
-34     await authService.logout(userId);
-35     sendSuccess(res, null, 'Logged out successfully');
-36   } catch (error) {
-37     next(error);
-38   }
-39 };
-40 const getCurrentUser = async (req, res, next) => {
-41   try {
-42     const userId = req.user.id;
-43     const user = await User.findById(userId).select('-refreshToken');
-44     if (!user) {
-45       return sendError(res, 'User not found', 404);
-46     }
-47 
-48     let captain = null;
-49     if (user.role === 'captain') {
-50       captain = await Captain.findOne({ userId: user._id }).select('status isOnline applicationStatus rejectionReason vehicleType vehicleModel plateNumber vehicleColor');
-51     }
-52 
-53     sendSuccess(res, { user, captain });
-54   } catch (error) {
-55     next(error);
-56   }
-57 };
+20 const refreshToken = wrap(async (req, res) => {
+21   const { refreshToken } = req.body;
+22   if (!refreshToken) return sendError(res, 'Refresh token required', 400);
+23   const result = await authService.refreshAccessToken(refreshToken);
+24   sendSuccess(res, result, 'Token refreshed');
+25 });
+26 
+27 const logout = wrap(async (req, res) => {
+28   await authService.logout(req.user.id, req.body?.refreshToken);
+29   sendSuccess(res, null, 'Logged out successfully');
+30 });
+31 
+32 const getCurrentUser = wrap(async (req, res) => {
+33   const user = await userRepo.findById(req.user.id);
+34   if (!user) return sendError(res, 'User not found', 404);
+35 
+36   let captain = null;
+37   if (user.role === 'captain') {
+38     captain = await Captain.findOne({ userId: user._id }).select(
+39       'status isOnline applicationStatus rejectionReason vehicleType vehicleModel plateNumber vehicleColor'
+40     );
+41   }
+42 
+43   sendSuccess(res, { user, captain });
+44 });
+45 
+46 const updateUserRole = wrap(async (req, res) => {
+47   const { role } = req.body;
+48   if (!['passenger', 'captain'].includes(role)) {
+49     return sendError(res, 'Invalid role', 400);
+50   }
+51 
+52   const user = await userRepo.updateById(
+53     req.user.id,
+54     { role },
+55     { runValidators: true, select: '-refreshToken -otpCode -otpExpiresAt' }
+56   );
+57   if (!user) return sendError(res, 'User not found', 404);
 58 
-59 const updateUserRole = async (req, res, next) => {
-60   try {
-61     const userId = req.user.id;
-62     const { role } = req.body;
-63 
-64     if (!['passenger', 'captain'].includes(role)) {
-65       return sendError(res, 'دور غير صالح', 400);
-66     }
-67 
-68     const user = await User.findByIdAndUpdate(
-69       userId,
-70       { role },
-71       { new: true, runValidators: true }
-72     ).select('-refreshToken -otpCode -otpExpiresAt');
+59   let applicationCode = null;
+60   if (role === 'captain') {
+61     const existing = await Captain.findOne({ userId: user._id });
+62     if (!existing) {
+63       const code = generateApplicationCode();
+64       await Captain.create({
+65         userId: user._id,
+66         applicationCode: code,
+67         applicationStatus: 'pending_approval',
+68         status: 'pending_review',
+69       });
+70       applicationCode = code;
+71     }
+72   }
 73 
-74     if (!user) {
-75       return sendError(res, 'المستخدم غير موجود', 404);
-76     }
+74   const tokens = generateTokens(user._id, user.role);
+75   user.refreshToken = tokens.refreshToken;
+76   await user.save();
 77 
-78     let applicationCode = null;
-79     if (role === 'captain') {
-80       const existingCaptain = await Captain.findOne({ userId: user._id });
-81       if (!existingCaptain) {
-82         const code = generateApplicationCode();
-83         await Captain.create({
-84           userId: user._id,
-85           applicationCode: code,
-86           applicationStatus: 'pending_approval',
-87           status: 'pending_review',
-88         });
-89         applicationCode = code;
-90       }
-91     }
-92 
-93     const tokens = generateTokens(user._id, user.role);
-94     user.refreshToken = tokens.refreshToken;
-95     await user.save();
-96 
-97     sendSuccess(res, {
-98       user,
-99       accessToken: tokens.accessToken,
-100       refreshToken: tokens.refreshToken,
-101       applicationCode
-102     }, 'تم تحديث الدور');
-103   } catch (error) {
-104     next(error);
-105   }
-106 };
-107 const updateProfile = async (req, res, next) => {
-108   try {
-109     const userId = req.user.id;
-110     const { name, phone } = req.body;
-111     const user = await User.findByIdAndUpdate(
-112       userId,
-113       { $set: { name, phone } },
-114       { new: true }
-115     ).select('-refreshToken');
-116     sendSuccess(res, user, 'Profile updated');
-117   } catch (error) { next(error); }
-118 };
-119 
-120 module.exports = {
-121   googleLogin,
-122   refreshToken,
-123   logout,
-124   getCurrentUser,
-125   updateUserRole,
-126   updateProfile
-127 };
+78   sendSuccess(res, {
+79     user,
+80     accessToken: tokens.accessToken,
+81     refreshToken: tokens.refreshToken,
+82     applicationCode,
+83   }, 'Role updated');
+84 });
+85 
+86 const updateProfile = wrap(async (req, res) => {
+87   const { name, phone } = req.body;
+88   const user = await userRepo.updateById(
+89     req.user.id,
+90     { $set: { name, phone } },
+91     { select: '-refreshToken' }
+92   );
+93   sendSuccess(res, user, 'Profile updated');
+94 });
+95 
+96 const uploadAvatar = (req, res, next) => {
+97   uploadSingleDocument(req, res, async (err) => {
+98     if (err) return sendError(res, err.message, 400);
+99     if (!req.file) return sendError(res, 'No file uploaded', 400);
+100     try {
+101       const user = await userRepo.updateById(req.user.id, { avatar: req.file.path });
+102       sendSuccess(res, { avatar: req.file.path }, 'Avatar updated');
+103     } catch (e) {
+104       next(e);
+105     }
+106   });
+107 };
+108 
+109 const sendOtp = wrap(async (req, res) => {
+110   const result = await authService.sendOtp(req.body.phone);
+111   sendSuccess(res, result, 'OTP sent');
+112 });
+113 
+114 const verifyOtp = wrap(async (req, res) => {
+115   const result = await authService.verifyOtpAndLogin(req.body.phone, req.body.code, req.body.name);
+116   sendSuccess(res, result, 'Login successful');
+117 });
+118 
+119 module.exports = { googleLogin, sendOtp, verifyOtp, refreshToken, logout, getCurrentUser, updateUserRole, updateProfile, uploadAvatar };
+```
+
+## File: `src\modules\auth\auth.repository.js`
+
+```javascript
+1 const userRepo = require('../user/user.repository');
+2 
+3 const findByGoogleOrEmail = (googleId, email) =>
+4   userRepo.findOne({ $or: [{ googleId }, { email }] });
+5 
+6 // MongoDB implicit array match: finds doc where refreshTokens array contains the value
+7 const findByIdAndToken = (id, refreshToken) =>
+8   userRepo.findOne({ _id: id, refreshTokens: refreshToken });
+9 
+10 const createUser = (data) => userRepo.create(data);
+11 
+12 const updateById = (id, update) => userRepo.updateById(id, update);
+13 
+14 const saveDoc = (doc) => doc.save();
+15 
+16 // Push a new refresh token; $slice: -5 keeps only the 5 most recent (FIFO eviction)
+17 const addRefreshToken = (userId, refreshToken) =>
+18   userRepo.updateById(userId, {
+19     $push: { refreshTokens: { $each: [refreshToken], $slice: -5 } },
+20   });
+21 
+22 // Remove a single device's token (logout from one device)
+23 const removeRefreshToken = (userId, refreshToken) =>
+24   userRepo.updateById(userId, { $pull: { refreshTokens: refreshToken } });
+25 
+26 // Revoke all devices (security logout / password change)
+27 const clearAllRefreshTokens = (userId) =>
+28   userRepo.updateById(userId, { $set: { refreshTokens: [] } });
+29 
+30 module.exports = {
+31   findByGoogleOrEmail,
+32   findByIdAndToken,
+33   createUser,
+34   updateById,
+35   saveDoc,
+36   addRefreshToken,
+37   removeRefreshToken,
+38   clearAllRefreshTokens,
+39 };
 ```
 
 ## File: `src\modules\auth\auth.routes.js`
@@ -1436,111 +1474,190 @@
 6 const { validate } = require('../../middlewares/validate');
 7 const { otpLimiter } = require('../../middlewares/rateLimit.middleware');
 8 
-9 router.post('/google', validate(validation.googleSchema), controller.googleLogin);
-10 router.post('/refresh-token', validate(validation.refreshSchema), controller.refreshToken);
-11 router.post('/logout', authMiddleware, controller.logout);
-12 router.get('/me', authMiddleware, controller.getCurrentUser);
-13 router.patch('/me', authMiddleware, validate(validation.profileUpdateSchema), controller.updateProfile);
-14 router.patch('/role', authMiddleware, validate(validation.updateRoleSchema), controller.updateUserRole);
-15 module.exports = router;
+9 router.post('/google',       validate(validation.googleSchema),    controller.googleLogin);
+10 router.post('/send-otp',    otpLimiter, validate(validation.sendOtpSchema),   controller.sendOtp);
+11 router.post('/verify-otp',  validate(validation.verifyOtpSchema),  controller.verifyOtp);
+12 router.post('/refresh-token', validate(validation.refreshSchema),  controller.refreshToken);
+13 router.post('/logout',      authMiddleware,                        controller.logout);
+14 router.post('/avatar',      authMiddleware,                        controller.uploadAvatar);
+15 router.get('/me',           authMiddleware,                        controller.getCurrentUser);
+16 router.patch('/me',         authMiddleware, validate(validation.profileUpdateSchema), controller.updateProfile);
+17 router.patch('/role',       authMiddleware, validate(validation.updateRoleSchema),    controller.updateUserRole);
+18 module.exports = router;
 ```
 
 ## File: `src\modules\auth\auth.service.js`
 
 ```javascript
-1 const User = require('../user/user.model');
-2 const { generateTokens, verifyRefreshToken } = require('../../utils/jwt.util');
-3 const { generateOtp, hashOtp, verifyOtp } = require('../../utils/otp.util');
-4 const env = require('../../config/env');
-5 const twilio = require('twilio')(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
-6 const { OAuth2Client } = require('google-auth-library');
+1 const authRepo = require('./auth.repository');
+2 const userRepo = require('../user/user.repository');
+3 const { generateTokens, verifyRefreshToken } = require('../../utils/jwt.util');
+4 const { generateOtp, hashOtp, verifyOtp } = require('../../utils/otp.util');
+5 const env = require('../../config/env');
+6 const logger = require('../../config/logger');
 7 
-8 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
+8 const OTP_TTL_SECONDS = 300; // 5 minutes
 9 
-10 // -------------------- Google --------------------
-11 const verifyGoogle = async (idToken) => {
-12   // TODO: Re-enable proper ID token verification in production
-13   // For development: decode token without verification
-14   const decodeBase64 = (str) => {
-15     try {
-16       return JSON.parse(Buffer.from(str, 'base64').toString());
-17     } catch (e) {
-18       return null;
-19     }
-20   };
-21 
-22   const tokenParts = idToken.split('.');
-23   let payload = null;
-24   if (tokenParts.length === 3) {
-25     payload = decodeBase64(tokenParts[1]);
-26   }
-27 
-28   let googleId, email, name, picture;
+10 // ─────────────────────────────────────────────────────────────
+11 // Google OAuth
+12 // ─────────────────────────────────────────────────────────────
+13 const loginWithGoogle = async (idToken) => {
+14   const payload = _decodeGoogleToken(idToken);
+15   const { googleId, email, name, picture } = payload;
+16 
+17   let user = await authRepo.findByGoogleOrEmail(googleId, email);
+18   if (!user) {
+19     user = await authRepo.createUser({ googleId, email, name, avatar: picture, role: null });
+20   } else {
+21     if (!user.googleId) user.googleId = googleId;
+22     if (!user.name && name) user.name = name;
+23     if (!user.avatar && picture) user.avatar = picture;
+24     await authRepo.saveDoc(user);
+25   }
+26 
+27   return _issueTokens(user);
+28 };
 29 
-30   if (payload && payload.sub) {
-31     googleId = payload.sub;
-32     email = payload.email;
-33     name = payload.name || email?.split('@')[0] || 'مستخدم Google';
-34     picture = payload.picture;
-35   } else {
-36     // Fallback for testing
-37     googleId = `temp_${Date.now()}`;
-38     email = `user_${Date.now()}@temp.com`;
-39     name = 'مستخدم مؤقت';
-40     picture = null;
-41   }
-42 
-43   // التأكد من وجود name
-44   if (!name || name.trim() === '') {
-45     name = 'مستخدم';
-46   }
-47 
-48   let user = await User.findOne({ $or: [{ googleId }, { email }] });
-49   if (!user) {
-50     user = await User.create({
-51       googleId,
-52       email,
-53       name,
-54       avatar: picture,
-55       role: null
-56     });
-57   } else if (!user.googleId) {
-58     user.googleId = googleId;
-59     if (!user.name && name) user.name = name;
-60     if (!user.avatar && picture) user.avatar = picture;
-61     await user.save();
-62   }
-63 
-64   const { accessToken, refreshToken } = generateTokens(user._id, user.role);
-65   user.refreshToken = refreshToken;
-66   await user.save();
-67 
-68   return { user, accessToken, refreshToken };
-69 };
-70 
-71 // -------------------- Refresh --------------------
-72 const refreshAccessToken = async (refreshToken) => {
-73   const decoded = verifyRefreshToken(refreshToken);
-74   if (!decoded) throw new Error('Invalid refresh token');
-75 
-76   const user = await User.findOne({ _id: decoded.id, refreshToken });
-77   if (!user) throw new Error('Refresh token not found');
+30 // ─────────────────────────────────────────────────────────────
+31 // OTP — Step 1: Send
+32 // ─────────────────────────────────────────────────────────────
+33 const sendOtp = async (phone) => {
+34   let user = await userRepo.findOne({ phone });
+35 
+36   if (!user) {
+37     user = await userRepo.create({ name: phone, phone, role: null });
+38   }
+39 
+40   const otp = generateOtp();
+41   user.otpCode = hashOtp(otp);
+42   user.otpExpiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
+43   await authRepo.saveDoc(user);
+44 
+45   await _sendOtpViaSms(phone, otp);
+46 
+47   logger.info(`[Auth] OTP sent to ${phone}`);
+48 
+49   return {
+50     message: 'OTP sent',
+51     expiresIn: OTP_TTL_SECONDS,
+52     ...(env.NODE_ENV !== 'production' && { devOtp: otp }),
+53   };
+54 };
+55 
+56 // ─────────────────────────────────────────────────────────────
+57 // OTP — Step 2: Verify + Login
+58 // ─────────────────────────────────────────────────────────────
+59 const verifyOtpAndLogin = async (phone, code, name) => {
+60   const user = await userRepo.findOne({ phone }, '+otpCode +otpExpiresAt');
+61   if (!user || !user.otpCode) throw new Error('OTP not found — request a new one');
+62 
+63   if (user.otpExpiresAt < new Date()) {
+64     user.otpCode = undefined;
+65     user.otpExpiresAt = undefined;
+66     await authRepo.saveDoc(user);
+67     throw new Error('OTP expired');
+68   }
+69 
+70   if (!verifyOtp(code, user.otpCode)) throw new Error('Invalid OTP');
+71 
+72   user.otpCode = undefined;
+73   user.otpExpiresAt = undefined;
+74 
+75   if (name && (user.name === user.phone || !user.name)) {
+76     user.name = name;
+77   }
 78 
-79   const { accessToken } = generateTokens(user._id, user.role);
-80   return { accessToken };
-81 };
-82 
-83 // -------------------- Logout --------------------
-84 const logout = async (userId) => {
-85   await User.findByIdAndUpdate(userId, { refreshToken: null });
-86   return true;
-87 };
-88 
-89 module.exports = {
-90   verifyGoogle,
-91   refreshAccessToken,
-92   logout,
-93 };
+79   await authRepo.saveDoc(user);
+80 
+81   logger.info(`[Auth] OTP verified for ${phone}`);
+82   return _issueTokens(user);
+83 };
+84 
+85 // ─────────────────────────────────────────────────────────────
+86 // Refresh token (with rotation)
+87 // ─────────────────────────────────────────────────────────────
+88 const refreshAccessToken = async (token) => {
+89   const decoded = verifyRefreshToken(token);
+90   if (!decoded) throw new Error('Invalid refresh token');
+91 
+92   const user = await authRepo.findByIdAndToken(decoded.id, token);
+93   if (!user) throw new Error('Refresh token not found or revoked');
+94 
+95   const { accessToken, refreshToken: newRefresh } = generateTokens(user._id, user.role);
+96 
+97   // Rotate: invalidate old token, register new one
+98   await authRepo.removeRefreshToken(user._id, token);
+99   await authRepo.addRefreshToken(user._id, newRefresh);
+100 
+101   return { accessToken, refreshToken: newRefresh };
+102 };
+103 
+104 // ─────────────────────────────────────────────────────────────
+105 // Logout — single device (specific token) or all devices
+106 // ─────────────────────────────────────────────────────────────
+107 const logout = async (userId, refreshToken) => {
+108   if (refreshToken) {
+109     await authRepo.removeRefreshToken(userId, refreshToken);
+110   } else {
+111     await authRepo.clearAllRefreshTokens(userId);
+112   }
+113 };
+114 
+115 // ─────────────────────────────────────────────────────────────
+116 // Helpers
+117 // ─────────────────────────────────────────────────────────────
+118 async function _issueTokens(user) {
+119   const { accessToken, refreshToken } = generateTokens(user._id, user.role);
+120   await authRepo.addRefreshToken(user._id, refreshToken);
+121   const safe = user.toObject();
+122   delete safe.refreshTokens;
+123   delete safe.otpCode;
+124   delete safe.otpExpiresAt;
+125   return { user: safe, accessToken, refreshToken };
+126 }
+127 
+128 function _decodeGoogleToken(idToken) {
+129   try {
+130     const parts = idToken.split('.');
+131     if (parts.length === 3) {
+132       const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+133       if (payload?.sub) {
+134         return {
+135           googleId: payload.sub,
+136           email: payload.email ?? null,
+137           name: payload.name || payload.email?.split('@')[0] || 'مستخدم',
+138           picture: payload.picture ?? null,
+139         };
+140       }
+141     }
+142   } catch (_) {}
+143   return {
+144     googleId: `dev_${Date.now()}`,
+145     email: `dev_${Date.now()}@temp.com`,
+146     name: 'مستخدم مؤقت',
+147     picture: null,
+148   };
+149 }
+150 
+151 async function _sendOtpViaSms(phone, otp) {
+152   if (env.NODE_ENV !== 'production') {
+153     logger.info(`[Auth] DEV OTP for ${phone}: ${otp}`);
+154     return;
+155   }
+156   try {
+157     const twilio = require('twilio')(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+158     await twilio.messages.create({
+159       body: `كود التحقق لوصلني: ${otp} — صالح لمدة 5 دقائق`,
+160       from: env.TWILIO_PHONE,
+161       to: `+2${phone}`,
+162     });
+163   } catch (err) {
+164     logger.error('[Auth] Twilio send failed', err);
+165     throw new Error('Failed to send OTP — please try again');
+166   }
+167 }
+168 
+169 module.exports = { loginWithGoogle, sendOtp, verifyOtpAndLogin, refreshAccessToken, logout };
 ```
 
 ## File: `src\modules\auth\auth.validation.js`
@@ -1562,353 +1679,279 @@
 14   plateNumber: Joi.string().min(3).max(20).required(),
 15 });
 16 
-17 const toggleOnlineSchema = Joi.object({
-18   isOnline: Joi.boolean().required(),
+17 const sendOtpSchema = Joi.object({
+18   phone: Joi.string().pattern(/^01[0-9]{9}$/).required(),
 19 });
-20 const updateRoleSchema = Joi.object({
-21   role: Joi.string().valid('passenger', 'captain').required(),
-22 });
-23 const profileUpdateSchema = Joi.object({
-24   name: Joi.string().min(2),
-25   phone: Joi.string().regex(/^01[0-9]{9}$/),
-26 });
-27 
-28 module.exports = {
-29   googleSchema,
-30   refreshSchema,
-31   registerCaptainSchema,
-32   toggleOnlineSchema,
-33   updateRoleSchema,
-34   profileUpdateSchema
-35 };
+20 
+21 const verifyOtpSchema = Joi.object({
+22   phone: Joi.string().pattern(/^01[0-9]{9}$/).required(),
+23   code: Joi.string().length(6).required(),
+24   name: Joi.string().min(2).max(50).optional(),
+25 });
+26 
+27 const toggleOnlineSchema = Joi.object({
+28   isOnline: Joi.boolean().required(),
+29 });
+30 const updateRoleSchema = Joi.object({
+31   role: Joi.string().valid('passenger', 'captain').required(),
+32 });
+33 const profileUpdateSchema = Joi.object({
+34   name: Joi.string().min(2),
+35   phone: Joi.string().regex(/^01[0-9]{9}$/),
+36 });
+37 
+38 module.exports = {
+39   googleSchema,
+40   sendOtpSchema,
+41   verifyOtpSchema,
+42   refreshSchema,
+43   registerCaptainSchema,
+44   toggleOnlineSchema,
+45   updateRoleSchema,
+46   profileUpdateSchema
+47 };
 ```
 
 ## File: `src\modules\captain\captain.controller.js`
 
 ```javascript
 1 const captainService = require('./captain.service');
-2 const { sendSuccess, sendError } = require('../../utils/response.util');
-3 const { generateApplicationCode } = require('../../utils/code.util');
-4 const Captain = require('./captain.model');
+2 const captainRepo = require('./captain.repository');
+3 const { sendSuccess, sendError } = require('../../utils/response.util');
+4 const { generateApplicationCode } = require('../../utils/code.util');
 5 
-6 const register = async (req, res, next) => {
-7   try {
-8     const userId = req.user.id;
-9     const data = req.body;
-10     const captain = await captainService.registerCaptain(userId, data);
-11     sendSuccess(res, captain, 'Captain registered successfully', 201);
-12   } catch (error) {
-13     next(error);
-14   }
-15 };
+6 const wrap = (fn) => async (req, res, next) => {
+7   try { await fn(req, res, next); } catch (err) { next(err); }
+8 };
+9 
+10 // ── Registration / profile ────────────────────────────────────────────
+11 const applyCaptain = wrap(async (req, res) => {
+12   const userId = req.user.id;
+13   const { vehicleType, vehicleModel, plateNumber, vehicleColor } = req.body;
+14 
+15   let captain = await captainRepo.findByUserId(userId);
 16 
-17 const uploadDocs = async (req, res, next) => {
-18   try {
-19     const userId = req.user.id;
-20     const files = req.files;
-21     const result = await captainService.uploadDocuments(userId, files);
-22     sendSuccess(res, result, 'Documents uploaded');
-23   } catch (error) {
-24     next(error);
-25   }
-26 };
-27 
-28 const getStatus = async (req, res, next) => {
-29   try {
-30     const userId = req.user.id;
-31     const status = await captainService.getCaptainStatus(userId);
-32     sendSuccess(res, status);
-33   } catch (error) {
-34     next(error);
-35   }
-36 };
+17   if (!captain) {
+18     const Captain = require('./captain.model');
+19     const code = generateApplicationCode();
+20     captain = await Captain.create({
+21       userId,
+22       applicationCode: code,
+23       applicationStatus: 'pending_approval',
+24       status: 'pending_review',
+25       vehicleType:  vehicleType  || undefined,
+26       vehicleModel: vehicleModel || undefined,
+27       plateNumber:  plateNumber  || undefined,
+28       vehicleColor: vehicleColor || undefined,
+29     });
+30     return sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus }, 'Captain application created', 201);
+31   }
+32 
+33   if (vehicleType)  captain.vehicleType  = vehicleType;
+34   if (vehicleModel) captain.vehicleModel = vehicleModel;
+35   if (plateNumber)  captain.plateNumber  = plateNumber;
+36   if (vehicleColor) captain.vehicleColor = vehicleColor;
 37 
-38 const getNearbyDrivers = async (req, res, next) => {
-39   if (process.env.NODE_ENV === 'development') {
-40     const { lat, lng } = req.query;
-41     const captains = await Captain.find({
-42       status: 'approved',
-43       isOnline: true,
-44     })
-45       .populate('userId', 'name phone avatar')
-46       .lean();
+38   await captainRepo.saveDoc(captain);
+39   sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus, vehicleInfoUpdated: true }, 'Captain data updated');
+40 });
+41 
+42 const checkApplicationStatus = wrap(async (req, res) => {
+43   const captain = await captainRepo.findByUserId(req.user.id);
+44   if (!captain) return sendError(res, 'No application found', 404);
+45   sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus });
+46 });
 47 
-48     return captains.map(c => ({
-49       captain_id: c._id.toString(),
-50       name: c.userId.name,
-51       phone: c.userId.phone || '',
-52       avatar: c.userId.avatar,
-53       vehicle_type: c.vehicleType,
-54       vehicle_model: c.vehicleModel,
-55       vehicle_color: c.vehicleColor || '',
-56       plate_number: c.plateNumber,
-57       lat: c.location?.coordinates?.[1] || lat,
-58       lng: c.location?.coordinates?.[0] || lng,
-59       status: c.isOnline ? 'available' : 'busy',
-60       rating: c.rating || 0,
-61       total_trips: c.totalTrips || 0,
-62     }));
-63   }
-64 };
-65 
-66 const toggleOnline = async (req, res, next) => {
-67   try {
-68     const userId = req.user.id;
-69     const { isOnline } = req.body;
-70     const captain = await captainService.toggleOnline(userId, isOnline);
-71     sendSuccess(res, { isOnline: captain.isOnline });
-72   } catch (error) {
-73     next(error);
-74   }
-75 };
-76 
-77 // Admin only
-78 const adminApprove = async (req, res, next) => {
-79   try {
-80     const { id } = req.params;
-81     const adminId = req.user.id;
-82     const captain = await captainService.approveCaptain(id, adminId);
-83     sendSuccess(res, captain, 'Captain approved');
-84   } catch (error) {
-85     next(error);
-86   }
-87 };
-88 
-89 const adminReject = async (req, res, next) => {
-90   try {
-91     const { id } = req.params;
-92     const { reason } = req.body;
-93     const captain = await captainService.rejectCaptain(id, reason);
-94     sendSuccess(res, captain, 'Captain rejected');
-95   } catch (error) {
-96     next(error);
-97   }
-98 };
-99 
-100 const applyCaptain = async (req, res, next) => {
-101   try {
-102     const userId = req.user.id;
-103     const { vehicleType, vehicleModel, plateNumber, vehicleColor } = req.body;
-104 
-105     let captain = await Captain.findOne({ userId });
+48 const getStatus = wrap(async (req, res) => {
+49   const status = await captainService.getCaptainStatus(req.user.id);
+50   sendSuccess(res, status);
+51 });
+52 
+53 // ── Availability ──────────────────────────────────────────────────────
+54 const toggleOnline = wrap(async (req, res) => {
+55   const { isOnline } = req.body;
+56   const captain = await captainService.toggleOnline(req.user.id, isOnline);
+57   sendSuccess(res, { isOnline: captain.isOnline });
+58 });
+59 
+60 // ── Nearby captains (passenger-facing) ───────────────────────────────
+61 const getNearbyDrivers = wrap(async (req, res) => {
+62   const { lat, lng, radius } = req.query;
+63   if (!lat || !lng) return sendError(res, 'lat and lng are required', 400);
+64   const captains = await captainService.getNearbyDrivers(
+65     parseFloat(lat),
+66     parseFloat(lng),
+67     radius ? parseFloat(radius) : 5
+68   );
+69   sendSuccess(res, captains);
+70 });
+71 
+72 // ── Location (REST fallback) ──────────────────────────────────────────
+73 const updateLocation = wrap(async (req, res) => {
+74   const { lat, lng } = req.body;
+75   await captainService.updateLocation(req.user.id, lat, lng);
+76   sendSuccess(res, null, 'Location updated');
+77 });
+78 
+79 // ── Documents ─────────────────────────────────────────────────────────
+80 const uploadSingleDoc = wrap(async (req, res) => {
+81   const { type } = req.params;
+82   const allowed = ['nationalId', 'driverLicense', 'vehicleLicense'];
+83   if (!allowed.includes(type)) return sendError(res, 'Invalid document type', 400);
+84   if (!req.file) return sendError(res, 'No file uploaded', 400);
+85 
+86   await captainService.updateSingleDocument(req.user.id, type, req.file.path);
+87   sendSuccess(res, { field: type, url: req.file.path }, 'Document uploaded');
+88 });
+89 
+90 // ── Personal & vehicle info ───────────────────────────────────────────
+91 const updatePersonal = wrap(async (req, res) => {
+92   const captain = await captainService.updatePersonal(req.user.id, req.body);
+93   sendSuccess(res, captain, 'Personal info updated');
+94 });
+95 
+96 const updateVehicle = wrap(async (req, res) => {
+97   const captain = await captainService.updateVehicle(req.user.id, req.body);
+98   sendSuccess(res, captain, 'Vehicle info updated');
+99 });
+100 
+101 // ── Admin actions ─────────────────────────────────────────────────────
+102 const adminApprove = wrap(async (req, res) => {
+103   const captain = await captainService.approveCaptain(req.params.id);
+104   sendSuccess(res, captain, 'Captain approved');
+105 });
 106 
-107     if (!captain) {
-108       const code = generateApplicationCode();
-109       captain = await Captain.create({
-110         userId,
-111         applicationCode: code,
-112         applicationStatus: 'pending_approval',
-113         status: 'pending_review',
-114         vehicleType: vehicleType || undefined,
-115         vehicleModel: vehicleModel || undefined,
-116         plateNumber: plateNumber || undefined,
-117         vehicleColor: vehicleColor || undefined,
-118       });
-119       return sendSuccess(res, {
-120         code: captain.applicationCode,
-121         status: captain.applicationStatus,
-122       }, 'تم إنشاء طلب الكابتن بنجاح', 201);
-123     }
-124 
-125     if (vehicleType) captain.vehicleType = vehicleType;
-126     if (vehicleModel) captain.vehicleModel = vehicleModel;
-127     if (plateNumber) captain.plateNumber = plateNumber;
-128     if (vehicleColor) captain.vehicleColor = vehicleColor;
-129 
-130     if (captain.applicationStatus === 'pending_approval' && captain.status !== 'approved') {
-131       captain.status = 'pending_review';
-132     }
-133 
-134     await captain.save();
-135 
-136     sendSuccess(res, {
-137       code: captain.applicationCode,
-138       status: captain.applicationStatus,
-139       vehicleInfoUpdated: true,
-140     }, 'تم تحديث بيانات الكابتن بنجاح');
-141 
-142   } catch (error) {
-143     next(error);
-144   }
-145 };
-146 
-147 const checkApplicationStatus = async (req, res, next) => {
-148   try {
-149     const userId = req.user.id;
-150     const captain = await Captain.findOne({ userId }).select('applicationCode applicationStatus');
-151     if (!captain) return sendError(res, 'No application found', 404);
-152     sendSuccess(res, {
-153       code: captain.applicationCode,
-154       status: captain.applicationStatus,
-155     });
-156   } catch (error) {
-157     next(error);
-158   }
-159 };
-160 
-161 const updateLocation = async (req, res, next) => {
-162   try {
-163     const userId = req.user.id;
-164     const { lat, lng } = req.body;
-165     await captainService.updateLocation(userId, lat, lng);
-166     sendSuccess(res, null, 'Location updated');
-167   } catch (error) {
-168     next(error);
-169   }
-170 };
-171 
-172 const uploadSingleDoc = async (req, res, next) => {
-173   try {
-174     const userId = req.user.id;
-175     const { type } = req.params;
-176 
-177     // التحقق من النوع (مهم)
-178     const allowedTypes = ['nationalId', 'driverLicense', 'vehicleLicense'];
-179     if (!allowedTypes.includes(type)) {
-180       return sendError(res, 'نوع المستند غير صالح', 400);
-181     }
-182 
-183     const documentUrl = req.file.path;
-184 
-185     const captain = await captainService.updateSingleDocument(userId, type, documentUrl);
-186 
-187     sendSuccess(res, {
-188       field: type,
-189       url: documentUrl,
-190     }, 'تم رفع المستند بنجاح');
-191   } catch (error) {
-192     next(error);
-193   }
-194 };
-195 const updatePersonal = async (req, res, next) => {
-196   try {
-197     const userId = req.user.id;
-198     const { nationalId, address, governorate, dateOfBirth } = req.body;
-199     const captain = await captainService.updateCaptainPersonal(userId, {
-200       nationalId, address, governorate, dateOfBirth
-201     });
-202     sendSuccess(res, captain, 'تم تحديث البيانات الشخصية');
-203   } catch (error) {
-204     next(error);
-205   }
-206 };
-207 
-208 const updateVehicle = async (req, res, next) => {
-209   try {
-210     const userId = req.user.id;
-211     const { vehicleType, vehicleModel, plateNumber, vehicleColor, passengerCapacity } = req.body;
-212     const captain = await captainService.updateCaptainVehicle(userId, {
-213       vehicleType, vehicleModel, plateNumber, vehicleColor, passengerCapacity
-214     });
-215     sendSuccess(res, captain, 'تم تحديث بيانات المركبة');
-216   } catch (error) {
-217     next(error);
-218   }
-219 };
-220 
-221 module.exports = {
-222   register,
-223   uploadDocs,
-224   getStatus,
-225   getNearbyDrivers,
-226   toggleOnline,
-227   adminApprove,
-228   adminReject,
-229   applyCaptain,
-230   checkApplicationStatus,
-231   updateLocation,
-232   uploadSingleDoc,
-233   updatePersonal,
-234   updatePersonal,
-235   updateVehicle,
-236 };
+107 const adminReject = wrap(async (req, res) => {
+108   const captain = await captainService.rejectCaptain(req.params.id, req.body.reason);
+109   sendSuccess(res, captain, 'Captain rejected');
+110 });
+111 
+112 module.exports = {
+113   applyCaptain,
+114   checkApplicationStatus,
+115   getStatus,
+116   toggleOnline,
+117   getNearbyDrivers,
+118   updateLocation,
+119   uploadSingleDoc,
+120   updatePersonal,
+121   updateVehicle,
+122   adminApprove,
+123   adminReject,
+124 };
 ```
 
 ## File: `src\modules\captain\captain.model.js`
 
 ```javascript
-1 // src/modules/captain/captain.model.js
+1 const mongoose = require('mongoose');
 2 
-3 const mongoose = require('mongoose');
-4 
-5 const captainSchema = new mongoose.Schema(
-6   {
-7     userId: {
-8       type: mongoose.Schema.Types.ObjectId,
-9       ref: 'User',
-10       required: true,
-11       unique: true,
-12     },
-13     vehicleType: {
-14       type: String,
-15       enum: ['car', 'motorcycle', 'tukutuk', 'alt_tukutuk'],
-16     },
-17     vehicleModel: {
-18       type: String,
-19       // غير مطلوب
-20     },
-21     plateNumber: {
-22       type: String,
-23       unique: true,
-24       sparse: true,
+3 const captainSchema = new mongoose.Schema(
+4   {
+5     userId: {
+6       type: mongoose.Schema.Types.ObjectId,
+7       ref: 'User',
+8       required: true,
+9       unique: true,
+10     },
+11     vehicleType: {
+12       type: String,
+13       enum: ['car', 'motorcycle', 'tukutuk', 'alt_tukutuk'],
+14     },
+15     vehicleModel: String,
+16     plateNumber: { type: String, unique: true, sparse: true },
+17     vehicleColor: String,
+18     documents: {
+19       nationalId: String,
+20       driverLicense: String,
+21       vehicleLicense: String,
+22       governorate: String,
+23       address: String,
+24       dateOfBirth: String,
 25     },
-26     vehicleColor: {
+26     status: {
 27       type: String,
-28     },
-29     lastLocationAt: {
-30       type: Date,
-31     },
-32     documents: {
-33       nationalId: String,
-34       driverLicense: String,
-35       vehicleLicense: String,
-36       governorate: String,
-37       address: String,
-38       dateOfBirth: { type: String },
-39     },
-40     status: {
-41       type: String,
-42       enum: ['pending_review', 'approved', 'rejected', 'banned'],
-43       default: 'pending_review',
-44     },
-45     rejectionReason: String,
-46     isOnline: {
-47       type: Boolean,
-48       default: false,
+28       enum: ['pending_review', 'approved', 'rejected', 'banned'],
+29       default: 'pending_review',
+30     },
+31     rejectionReason: String,
+32     applicationCode: { type: String, unique: true, sparse: true },
+33     applicationStatus: {
+34       type: String,
+35       enum: ['pending_approval', 'approved', 'rejected'],
+36       default: 'pending_approval',
+37     },
+38 
+39     // Availability & presence
+40     isOnline: { type: Boolean, default: false },
+41     isOnTrip: { type: Boolean, default: false },
+42     socketId: { type: String },
+43     lastActiveAt: { type: Date },
+44 
+45     // Location (GeoJSON)
+46     location: {
+47       type: { type: String, enum: ['Point'], default: 'Point' },
+48       coordinates: { type: [Number], default: [0, 0] },
 49     },
-50     location: {
-51       type: { type: String, enum: ['Point'], default: 'Point' },
-52       coordinates: { type: [Number], default: [0, 0] },
-53     },
-54     rating: {
-55       type: Number,
-56       min: 0,
-57       max: 5,
-58       default: 0,
-59     },
-60     totalTrips: {
-61       type: Number,
-62       default: 0,
-63     },
-64     applicationCode: {
-65       type: String,
-66       unique: true,
-67       sparse: true,
-68     },
-69     applicationStatus: {
-70       type: String,
-71       enum: ['pending_approval', 'approved', 'rejected'],
-72       default: 'pending_approval',
-73     },
-74   },
-75   { timestamps: true }
-76 );
-77 
-78 // فهرس جغرافي
-79 captainSchema.index({ location: '2dsphere' });
-80 
-81 const Captain = mongoose.model('Captain', captainSchema);
-82 module.exports = Captain;
+50     heading: { type: Number, default: 0 },
+51     lastLocationAt: Date,
+52 
+53     // Stats
+54     rating: { type: Number, min: 0, max: 5, default: 0 },
+55     totalTrips: { type: Number, default: 0 },
+56   },
+57   { timestamps: true }
+58 );
+59 
+60 captainSchema.index({ location: '2dsphere' });
+61 
+62 module.exports = mongoose.model('Captain', captainSchema);
+```
+
+## File: `src\modules\captain\captain.repository.js`
+
+```javascript
+1 const Captain = require('./captain.model');
+2 
+3 const findById = (id) => Captain.findById(id);
+4 
+5 const findByUserId = (userId) => Captain.findOne({ userId });
+6 
+7 const findByUserIdPopulated = (userId) =>
+8   Captain.findOne({ userId }).populate('userId', 'name avatar');
+9 
+10 const findNearby = (lng, lat, radiusKm = 5) =>
+11   Captain.find({
+12     status: 'approved',
+13     isOnline: true,
+14     isOnTrip: false,
+15     location: {
+16       $near: {
+17         $geometry: { type: 'Point', coordinates: [lng, lat] },
+18         $maxDistance: radiusKm * 1000,
+19       },
+20     },
+21   })
+22     .populate('userId', 'name avatar phone')
+23     .lean();
+24 
+25 const updateById = (id, update) =>
+26   Captain.findByIdAndUpdate(id, update, { new: true });
+27 
+28 const updateByUserId = (userId, update) =>
+29   Captain.findOneAndUpdate({ userId }, update, { new: true });
+30 
+31 const saveDoc = (doc) => doc.save();
+32 
+33 module.exports = {
+34   findById,
+35   findByUserId,
+36   findByUserIdPopulated,
+37   findNearby,
+38   updateById,
+39   updateByUserId,
+40   saveDoc,
+41 };
 ```
 
 ## File: `src\modules\captain\captain.routes.js`
@@ -1919,180 +1962,284 @@
 3 const controller = require('./captain.controller');
 4 const authMiddleware = require('../../middlewares/auth.middleware');
 5 const { requireRole } = require('../../middlewares/role.middleware');
-6 const { uploadDocuments } = require('../../middlewares/upload.middleware');
-7 const { validate } = require('../../middlewares/validate');
-8 const { registerCaptainSchema, toggleOnlineSchema } = require('../auth/auth.validation');
-9 const uploadSingle = require('../../middlewares/upload.middleware').uploadSingleDocument;
-10 
-11 router.post('/register', authMiddleware, validate(registerCaptainSchema), controller.register);
-12 router.post('/documents', authMiddleware, uploadDocuments, controller.uploadDocs);
-13 router.get('/status', authMiddleware, controller.getStatus);
-14 router.get('/nearby', authMiddleware, requireRole('passenger'), controller.getNearbyDrivers);
-15 router.patch('/online', authMiddleware, requireRole('captain'), validate(toggleOnlineSchema), controller.toggleOnline);
-16 router.post('/location', authMiddleware, requireRole('captain'), controller.updateLocation);
-17 
-18 router.patch('/admin/captain/:id/approve', authMiddleware, requireRole('admin'), controller.adminApprove);
-19 router.patch('/admin/captain/:id/reject', authMiddleware, requireRole('admin'), controller.adminReject);
-20 router.post('/apply', authMiddleware, controller.applyCaptain);
-21 router.get('/application/status', authMiddleware, controller.checkApplicationStatus);
-22 router.post('/apply', authMiddleware, controller.applyCaptain);
-23 router.get('/application/status', authMiddleware, controller.checkApplicationStatus);
-24 router.post('/documents/:type', authMiddleware, uploadSingle, controller.uploadSingleDoc);
-25 router.post('/documents', authMiddleware, uploadDocuments, controller.uploadDocs);
-26 router.patch('/personal', authMiddleware, controller.updatePersonal);
-27 router.patch('/vehicle', authMiddleware, controller.updateVehicle);
-28 
-29 module.exports = router;
+6 const { validate } = require('../../middlewares/validate');
+7 const { toggleOnlineSchema } = require('../auth/auth.validation');
+8 const { uploadDocuments, uploadSingleDocument } = require('../../middlewares/upload.middleware');
+9 
+10 // ── Captain profile / application ─────────────────────────────────────
+11 router.post('/apply',              authMiddleware, controller.applyCaptain);
+12 router.get('/application/status',  authMiddleware, controller.checkApplicationStatus);
+13 router.get('/status',              authMiddleware, controller.getStatus);
+14 router.patch('/personal',          authMiddleware, controller.updatePersonal);
+15 router.patch('/vehicle',           authMiddleware, controller.updateVehicle);
+16 
+17 // ── Documents ─────────────────────────────────────────────────────────
+18 router.post('/documents/:type', authMiddleware, requireRole('captain'), uploadSingleDocument, controller.uploadSingleDoc);
+19 router.post('/documents',       authMiddleware, requireRole('captain'), uploadDocuments,       controller.uploadSingleDoc);
+20 
+21 // ── Availability & location ───────────────────────────────────────────
+22 router.patch('/online',   authMiddleware, requireRole('captain'), validate(toggleOnlineSchema), controller.toggleOnline);
+23 router.post('/location',  authMiddleware, requireRole('captain'), controller.updateLocation);
+24 
+25 // ── Nearby (passenger-facing) ─────────────────────────────────────────
+26 router.get('/nearby', authMiddleware, requireRole('passenger'), controller.getNearbyDrivers);
+27 
+28 // ── Admin actions ─────────────────────────────────────────────────────
+29 router.patch('/:id/approve', authMiddleware, requireRole('admin'), controller.adminApprove);
+30 router.patch('/:id/reject',  authMiddleware, requireRole('admin'), controller.adminReject);
+31 
+32 module.exports = router;
 ```
 
 ## File: `src\modules\captain\captain.service.js`
 
 ```javascript
-1 const Captain = require('./captain.model');
-2 const User = require('../user/user.model');
-3 // ---------- Register Captain (called from controller) ----------
-4 const registerCaptain = async (userId, data) => {
-5   const existing = await Captain.findOne({ userId });
-6   if (existing) throw new Error('Captain already registered');
-7 
-8   const captain = await Captain.create({
-9     userId,
-10     vehicleType: data.vehicleType,
-11     vehicleModel: data.vehicleModel,
-12     plateNumber: data.plateNumber,
-13     status: 'pending_review',
-14   });
-15   return captain;
-16 };
-17 
-18 // ---------- Upload Documents ----------
-19 const uploadDocuments = async (userId, files) => {
-20   const captain = await Captain.findOne({ userId });
-21   if (!captain) throw new Error('Captain not found');
-22 
-23   const updates = {};
-24   if (files.nationalId) updates['documents.nationalId'] = files.nationalId[0].path;
-25   if (files.driverLicense) updates['documents.driverLicense'] = files.driverLicense[0].path;
-26   if (files.vehicleLicense) updates['documents.vehicleLicense'] = files.vehicleLicense[0].path;
-27 
-28   await Captain.updateOne({ _id: captain._id }, { $set: updates });
-29   return { message: 'Documents uploaded successfully' };
+1 const captainRepo = require('./captain.repository');
+2 const userRepo = require('../user/user.repository');
+3 const { generateApplicationCode } = require('../../utils/code.util');
+4 
+5 const registerCaptain = async (userId, data) => {
+6   const existing = await captainRepo.findByUserId(userId);
+7   if (existing) throw new Error('Captain already registered');
+8   const Captain = require('./captain.model');
+9   const captain = new Captain({
+10     userId,
+11     vehicleType: data.vehicleType,
+12     vehicleModel: data.vehicleModel,
+13     plateNumber: data.plateNumber,
+14     status: 'pending_review',
+15   });
+16   return captainRepo.saveDoc(captain);
+17 };
+18 
+19 const getCaptainStatus = async (userId) => {
+20   const captain = await captainRepo.findByUserId(userId);
+21   if (!captain) return { status: 'not_registered' };
+22   return { status: captain.status, rejectionReason: captain.rejectionReason };
+23 };
+24 
+25 const toggleOnline = async (userId, isOnline) => {
+26   const captain = await captainRepo.findByUserId(userId);
+27   if (!captain) throw new Error('Captain not found');
+28   if (captain.status !== 'approved') throw new Error('Captain not approved');
+29   return captainRepo.updateByUserId(userId, { isOnline });
 30 };
 31 
-32 // ---------- Get Captain Status ----------
-33 const getCaptainStatus = async (userId) => {
-34   const captain = await Captain.findOne({ userId }).select('status rejectionReason');
-35   if (!captain) return { status: 'not_registered' };
-36   return { status: captain.status, rejectionReason: captain.rejectionReason };
-37 };
-38 
-39 // ---------- Approve / Reject (Admin) ----------
-40 const approveCaptain = async (captainId, adminId) => {
-41   const captain = await Captain.findById(captainId);
-42   if (!captain) throw new Error('Captain not found');
-43   captain.status = 'approved';
-44   captain.rejectionReason = null;
-45   await captain.save();
-46   await User.findByIdAndUpdate(captain.userId, { role: 'captain' });
-47 
-48   return captain;
-49 };
-50 
-51 const rejectCaptain = async (captainId, reason) => {
-52   const captain = await Captain.findById(captainId);
-53   if (!captain) throw new Error('Captain not found');
-54   captain.status = 'rejected';
-55   captain.rejectionReason = reason;
-56   await captain.save();
-57   return captain;
-58 };
-59 
-60 // ---------- Toggle Online Status ----------
-61 const toggleOnline = async (userId, isOnline) => {
-62   const captain = await Captain.findOne({ userId });
-63   if (!captain) throw new Error('Captain not found');
-64   if (captain.status !== 'approved') throw new Error('Captain not approved');
-65   captain.isOnline = isOnline;
-66   await captain.save();
-67   return captain;
-68 };
-69 
-70 // ---------- Nearby Drivers (Geo) ----------
-71 const getNearbyDrivers = async (lat, lng, radius = 3) => {
-72   const captains = await Captain.find({
-73     status: 'approved',
-74     isOnline: true,
-75     location: {
-76       $near: {
-77         $geometry: { type: 'Point', coordinates: [lng, lat] },
-78         $maxDistance: radius * 1000,
-79       },
-80     },
-81   })
-82     .populate('userId', 'name phone avatar')
-83     .lean();
-84 
-85   return captains.map(c => ({
-86     captain_id: c._id.toString(),
-87     name: c.userId.name,
-88     phone: c.userId.phone || '',
-89     avatar: c.userId.avatar,
-90     vehicle_type: c.vehicleType,
-91     vehicle_model: c.vehicleModel,
-92     vehicle_color: c.vehicleColor || '',
-93     plate_number: c.plateNumber,
-94     lat: c.location?.coordinates?.[1] || 0,
-95     lng: c.location?.coordinates?.[0] || 0,
-96     status: c.isOnline ? 'available' : 'busy',
-97     rating: c.rating || 0,
-98     total_trips: c.totalTrips || 0,
-99   }));
-100 };
-101 const updateLocation = async (userId, lat, lng) => {
-102   const captain = await Captain.findOne({ userId });
-103   if (!captain) throw new Error('Captain not found');
-104   captain.location = { type: 'Point', coordinates: [lng, lat] };
-105   captain.lastLocationAt = new Date();
-106   await captain.save();
-107 };
-108 // أضف هذه الدالة
-109 const updateSingleDocument = async (userId, type, fileUrl) => {
-110   const captain = await Captain.findOne({ userId });
-111   if (!captain) throw new Error('الكابتن غير موجود');
-112 
-113   // تحديث الحقل المحدد في documents
-114   captain.documents[type] = fileUrl;
-115   await captain.save();
-116   return captain;
-117 };
-118 const updateCaptainPersonal = async (userId, personalData) => {
-119   let captain = await Captain.findOne({ userId });
-120   if (!captain) throw new Error('لم يتم إنشاء حساب كابتن بعد');
-121   Object.assign(captain, personalData);
-122   await captain.save();
-123   return captain;
-124 };
-125 
-126 const updateCaptainVehicle = async (userId, vehicleData) => {
-127   let captain = await Captain.findOne({ userId });
-128   if (!captain) throw new Error('لم يتم إنشاء حساب كابتن بعد');
-129   Object.assign(captain, vehicleData);
-130   await captain.save();
-131   return captain;
-132 };
-133 module.exports = {
-134   registerCaptain,
-135   uploadDocuments,
-136   getCaptainStatus,
-137   approveCaptain,
-138   rejectCaptain,
-139   getNearbyDrivers,
-140   toggleOnline,
-141   updateSingleDocument,
-142   updateLocation,
-143   updateCaptainPersonal,
-144   updateCaptainVehicle
-145 };
+32 const getNearbyDrivers = async (lat, lng, radiusKm = 5) => {
+33   const captains = await captainRepo.findNearby(lng, lat, radiusKm);
+34   return captains.map(_formatCaptainForPassenger);
+35 };
+36 
+37 const approveCaptain = async (captainId) => {
+38   const captain = await captainRepo.findById(captainId);
+39   if (!captain) throw new Error('Captain not found');
+40   captain.status = 'approved';
+41   captain.rejectionReason = null;
+42   await captainRepo.saveDoc(captain);
+43   await userRepo.updateById(captain.userId, { role: 'captain' });
+44   return captain;
+45 };
+46 
+47 const rejectCaptain = async (captainId, reason) => {
+48   const captain = await captainRepo.findById(captainId);
+49   if (!captain) throw new Error('Captain not found');
+50   captain.status = 'rejected';
+51   captain.rejectionReason = reason;
+52   return captainRepo.saveDoc(captain);
+53 };
+54 
+55 const updateLocation = async (userId, lat, lng) => {
+56   const captain = await captainRepo.findByUserId(userId);
+57   if (!captain) throw new Error('Captain not found');
+58   return captainRepo.updateByUserId(userId, {
+59     location: { type: 'Point', coordinates: [lng, lat] },
+60     lastLocationAt: new Date(),
+61   });
+62 };
+63 
+64 const updatePersonal = async (userId, data) => {
+65   const captain = await captainRepo.findByUserId(userId);
+66   if (!captain) throw new Error('Captain not found');
+67   const { nationalId, address, governorate, dateOfBirth } = data;
+68   if (nationalId !== undefined) captain.documents.nationalId = nationalId;
+69   if (address !== undefined) captain.documents.address = address;
+70   if (governorate !== undefined) captain.documents.governorate = governorate;
+71   if (dateOfBirth !== undefined) captain.documents.dateOfBirth = dateOfBirth;
+72   return captainRepo.saveDoc(captain);
+73 };
+74 
+75 const updateVehicle = async (userId, data) => {
+76   const captain = await captainRepo.findByUserId(userId);
+77   if (!captain) throw new Error('Captain not found');
+78   const { vehicleType, vehicleModel, plateNumber, vehicleColor } = data;
+79   if (vehicleType) captain.vehicleType = vehicleType;
+80   if (vehicleModel) captain.vehicleModel = vehicleModel;
+81   if (plateNumber) captain.plateNumber = plateNumber;
+82   if (vehicleColor) captain.vehicleColor = vehicleColor;
+83   return captainRepo.saveDoc(captain);
+84 };
+85 
+86 const updateSingleDocument = async (userId, type, fileUrl) => {
+87   const captain = await captainRepo.findByUserId(userId);
+88   if (!captain) throw new Error('Captain not found');
+89   captain.documents[type] = fileUrl;
+90   return captainRepo.saveDoc(captain);
+91 };
+92 
+93 // -------------------- helpers --------------------
+94 function _formatCaptainForPassenger(c) {
+95   return {
+96     captainId: c._id.toString(),
+97     name: c.userId?.name,
+98     phone: c.userId?.phone || '',
+99     avatar: c.userId?.avatar,
+100     vehicleType: c.vehicleType,
+101     vehicleModel: c.vehicleModel,
+102     vehicleColor: c.vehicleColor || '',
+103     plateNumber: c.plateNumber,
+104     lat: c.location?.coordinates?.[1] ?? 0,
+105     lng: c.location?.coordinates?.[0] ?? 0,
+106     heading: c.heading ?? 0,
+107     rating: c.rating ?? 0,
+108     totalTrips: c.totalTrips ?? 0,
+109   };
+110 }
+111 
+112 module.exports = {
+113   registerCaptain,
+114   getCaptainStatus,
+115   toggleOnline,
+116   getNearbyDrivers,
+117   approveCaptain,
+118   rejectCaptain,
+119   updateLocation,
+120   updatePersonal,
+121   updateVehicle,
+122   updateSingleDocument,
+123 };
+```
+
+## File: `src\modules\captain\captain.socket.js`
+
+```javascript
+1 const captainRepo = require('./captain.repository');
+2 const logger = require('../../config/logger');
+3 const { emitToPassengers } = require('../../socket');
+4 
+5 const LOCATION_THROTTLE_MS = 3000;
+6 const _lastDbWrite = new Map();
+7 
+8 const register = (io, socket) => {
+9   if (socket.data.role !== 'captain') return;
+10 
+11   const userId = socket.data.userId;
+12 
+13   // ── Go online ────────────────────────────────────────────────────
+14   socket.on('captain:go:online', async () => {
+15     try {
+16       const captain = await captainRepo.findByUserIdPopulated(userId);
+17       if (!captain || captain.status !== 'approved') {
+18         return socket.emit('error', { code: 'NOT_APPROVED', message: 'Captain not approved' });
+19       }
+20 
+21       // Profile completeness gate
+22       if (!captain.vehicleType || !captain.vehicleModel || !captain.plateNumber) {
+23         return socket.emit('error', { code: 'PROFILE_INCOMPLETE', message: 'Complete your vehicle profile first' });
+24       }
+25 
+26       captain.isOnline = true;
+27       captain.socketId = socket.id;
+28       captain.lastActiveAt = new Date();
+29       await captainRepo.saveDoc(captain);
+30 
+31       // Cache Captain._id on socket for fast access in location updates
+32       socket.data.captainId = captain._id.toString();
+33 
+34       emitToPassengers('captain:appear', _formatAppear(captain));
+35       socket.emit('captain:online:ack', { isOnline: true });
+36 
+37       logger.info(`[Captain Socket] ${userId} went online`);
+38     } catch (err) {
+39       logger.error('[Captain Socket] captain:go:online error', err);
+40     }
+41   });
+42 
+43   // ── Go offline ───────────────────────────────────────────────────
+44   socket.on('captain:go:offline', () => _setOffline(userId, socket));
+45 
+46   // ── Location update (high frequency) ────────────────────────────
+47   socket.on('captain:location:update', async ({ lat, lng, heading = 0 }) => {
+48     if (lat == null || lng == null) return;
+49 
+50     const captainId = socket.data.captainId;
+51     if (!captainId) return; // not online yet
+52 
+53     // Instant broadcast to passengers (no DB wait)
+54     emitToPassengers('captain:move', { captainId, lat, lng, heading });
+55 
+56     // If captain is in a live trip, also broadcast to the trip room
+57     const tripId = socket.data.activeTripId;
+58     if (tripId) {
+59       io.to(`trip:${tripId}`).emit('trip:location:update', { captainId, lat, lng, heading });
+60     }
+61 
+62     // Throttled DB write
+63     const now = Date.now();
+64     if (now - (_lastDbWrite.get(userId) ?? 0) < LOCATION_THROTTLE_MS) return;
+65     _lastDbWrite.set(userId, now);
+66 
+67     captainRepo
+68       .updateByUserId(userId, {
+69         $set: {
+70           location: { type: 'Point', coordinates: [lng, lat] },
+71           heading,
+72           lastLocationAt: new Date(),
+73         },
+74       })
+75       .catch((err) => logger.error('[Captain Socket] location DB write error', err));
+76   });
+77 
+78   // ── Auto-offline on disconnect ───────────────────────────────────
+79   socket.on('disconnect', () => _setOffline(userId, socket));
+80 };
+81 
+82 // ── Private ──────────────────────────────────────────────────────────
+83 async function _setOffline(userId, socket) {
+84   try {
+85     const captain = await captainRepo.findByUserId(userId);
+86     if (!captain || !captain.isOnline) return;
+87 
+88     // Guard against duplicate-socket race: a newer socket may have taken over
+89     if (captain.socketId && captain.socketId !== socket.id) return;
+90 
+91     captain.isOnline = false;
+92     captain.socketId = null;
+93     captain.lastActiveAt = new Date();
+94     await captainRepo.saveDoc(captain);
+95 
+96     // Use socket.to instead of emitToPassengers so the emitter excludes itself
+97     socket.to('passengers').emit('captain:disappear', { captainId: captain._id.toString() });
+98     logger.info(`[Captain Socket] ${userId} went offline`);
+99   } catch (err) {
+100     logger.error('[Captain Socket] _setOffline error', err);
+101   }
+102 }
+103 
+104 function _formatAppear(captain) {
+105   return {
+106     captainId: captain._id.toString(),
+107     name: captain.userId?.name,
+108     avatar: captain.userId?.avatar,
+109     vehicleType: captain.vehicleType,
+110     vehicleColor: captain.vehicleColor,
+111     lat: captain.location?.coordinates?.[1] ?? 0,
+112     lng: captain.location?.coordinates?.[0] ?? 0,
+113     heading: captain.heading ?? 0,
+114     rating: captain.rating ?? 0,
+115   };
+116 }
+117 
+118 module.exports = { register };
 ```
 
 ## File: `src\modules\fare\fare.controller.js`
@@ -2475,84 +2622,68 @@
 1 const tripService = require('./trip.service');
 2 const { sendSuccess, sendError } = require('../../utils/response.util');
 3 
-4 const createTrip = async (req, res, next) => {
-5   try {
-6     const passengerId = req.user.id;
-7     const { captainId, startLocation } = req.body;
-8     const trip = await tripService.createTrip(passengerId, captainId, startLocation);
-9     sendSuccess(res, trip, 'تم إنشاء الرحلة بنجاح', 201);
-10   } catch (error) {
-11     next(error);
-12   }
-13 };
-14 
-15 const confirmStart = async (req, res, next) => {
-16   try {
-17     const { id } = req.params;
-18     const userId = req.user.id;
-19     const role = req.user.role;
-20     const trip = await tripService.confirmStart(id, userId, role);
-21     sendSuccess(res, trip, 'تم تأكيد بدء الرحلة');
-22   } catch (error) {
-23     next(error);
-24   }
-25 };
-26 
-27 const requestEnd = async (req, res, next) => {
-28   try {
-29     const { id } = req.params;
-30     const userId = req.user.id;
-31     const role = req.user.role;
-32     const trip = await tripService.requestEndTrip(id, userId, role);
-33     sendSuccess(res, trip, 'تم إرسال طلب إنهاء الرحلة');
-34   } catch (error) {
-35     next(error);
-36   }
-37 };
+4 // Thin wrapper — all business logic lives in trip.service
+5 const wrap = (fn) => async (req, res, next) => {
+6   try { await fn(req, res, next); } catch (err) { next(err); }
+7 };
+8 
+9 const createTrip = wrap(async (req, res) => {
+10   const trip = await tripService.createTrip(req.user.id, req.body.captainId, req.body.startLocation);
+11   sendSuccess(res, trip, 'Trip created', 201);
+12 });
+13 
+14 const acceptTrip = wrap(async (req, res) => {
+15   const trip = await tripService.acceptTrip(req.params.id, req.user.id);
+16   sendSuccess(res, trip, 'Trip accepted');
+17 });
+18 
+19 const markOnTheWay = wrap(async (req, res) => {
+20   const trip = await tripService.markOnTheWay(req.params.id, req.user.id);
+21   sendSuccess(res, trip);
+22 });
+23 
+24 const markArrived = wrap(async (req, res) => {
+25   const trip = await tripService.markArrived(req.params.id, req.user.id);
+26   sendSuccess(res, trip);
+27 });
+28 
+29 const startTrip = wrap(async (req, res) => {
+30   const trip = await tripService.startTrip(req.params.id, req.user.id);
+31   sendSuccess(res, trip);
+32 });
+33 
+34 const endTrip = wrap(async (req, res) => {
+35   const trip = await tripService.endTrip(req.params.id, req.user.id, req.body.distanceKm);
+36   sendSuccess(res, trip);
+37 });
 38 
-39 const confirmEnd = async (req, res, next) => {
-40   try {
-41     const { id } = req.params;
-42     const { distanceKm } = req.body;
-43     const userId = req.user.id;
-44     const role = req.user.role;
-45     const trip = await tripService.confirmEndTrip(id, userId, role, distanceKm);
-46     sendSuccess(res, trip, 'تم إنهاء الرحلة بنجاح');
-47   } catch (error) {
-48     next(error);
-49   }
-50 };
-51 
-52 const cancelTrip = async (req, res, next) => {
-53   try {
-54     const { id } = req.params;
-55     const { reason } = req.body;
-56     const userId = req.user.id;
-57     const trip = await tripService.cancelTrip(id, userId, reason);
-58     sendSuccess(res, trip, 'تم إلغاء الرحلة');
-59   } catch (error) {
-60     next(error);
-61   }
-62 };
-63 
-64 const getTrip = async (req, res, next) => {
-65   try {
-66     const { id } = req.params;
-67     const trip = await tripService.getTrip(id);
-68     sendSuccess(res, trip);
-69   } catch (error) {
-70     next(error);
-71   }
-72 };
-73 
-74 module.exports = {
-75   createTrip,
-76   confirmStart,
-77   requestEnd,
-78   confirmEnd,
-79   cancelTrip,
-80   getTrip,
-81 };
+39 const cancelTrip = wrap(async (req, res) => {
+40   const trip = await tripService.cancelTrip(req.params.id, req.user.id, req.user.role, req.body.reason);
+41   sendSuccess(res, trip, 'Trip cancelled');
+42 });
+43 
+44 const getCurrentTrip = wrap(async (req, res) => {
+45   const trip = await tripService.getCurrentTrip(req.user.id, req.user.role);
+46   sendSuccess(res, trip);
+47 });
+48 
+49 const getTrip = wrap(async (req, res) => {
+50   const trip = await tripService.getTrip(req.params.id);
+51   if (!trip) return sendError(res, 'Trip not found', 404);
+52   sendSuccess(res, trip);
+53 });
+54 
+55 module.exports = {
+56   createTrip,
+57   acceptTrip,
+58   markOnTheWay,
+59   markArrived,
+60   startTrip,
+61   endTrip,
+62   cancelTrip,
+63   getCurrentTrip,
+64   getTrip,
+65 };
 ```
 
 ## File: `src\modules\trip\trip.model.js`
@@ -2560,43 +2691,92 @@
 ```javascript
 1 const mongoose = require('mongoose');
 2 
-3 const tripSchema = new mongoose.Schema(
-4   {
-5     passengerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-6     captainId: { type: mongoose.Schema.Types.ObjectId, ref: 'Captain', required: true },
-7     vehicleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vehicle' }, // optional
-8     status: {
-9       type: String,
-10       enum: ['pending', 'active', 'ended', 'cancelled'],
-11       default: 'pending',
-12     },
-13     startLocation: {
-14       lat: Number,
-15       lng: Number,
-16       address: String,
-17     },
-18     endLocation: {
-19       lat: Number,
-20       lng: Number,
-21       address: String,
-22     },
-23     distanceKm: { type: Number, default: 0 },
-24     totalFare: { type: Number, default: 0 },
-25     firstKmFare: { type: Number, default: 10 },
-26     extraKmFare: { type: Number, default: 7 },
-27     passengerConfirmedStart: { type: Boolean, default: false },
-28     captainConfirmedStart: { type: Boolean, default: false },
-29     passengerConfirmedEnd: { type: Boolean, default: false },
-30     captainConfirmedEnd: { type: Boolean, default: false },
-31     endRequestedBy: { type: String, enum: ['passenger', 'captain'] },
-32     cancellationReason: { type: String },
-33     startedAt: { type: Date },
-34     endedAt: { type: Date },
-35   },
-36   { timestamps: true }
-37 );
-38 
-39 module.exports = mongoose.model('Trip', tripSchema);
+3 const VALID_STATUSES = ['searching', 'accepted', 'onTheWay', 'arrived', 'started', 'ended', 'cancelled'];
+4 
+5 // Defines which transitions are legal
+6 const TRANSITIONS = {
+7   searching: ['accepted', 'cancelled'],
+8   accepted:  ['onTheWay', 'cancelled'],
+9   onTheWay:  ['arrived', 'cancelled'],
+10   arrived:   ['started', 'cancelled'],
+11   started:   ['ended', 'cancelled'],
+12   ended:     [],
+13   cancelled: [],
+14 };
+15 
+16 const tripSchema = new mongoose.Schema(
+17   {
+18     passengerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+19     captainId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Captain', required: true },
+20     status: {
+21       type: String,
+22       enum: VALID_STATUSES,
+23       default: 'searching',
+24     },
+25     startLocation: {
+26       lat:     { type: Number, required: true },
+27       lng:     { type: Number, required: true },
+28       address: { type: String },
+29     },
+30     endLocation: {
+31       lat:     Number,
+32       lng:     Number,
+33       address: String,
+34     },
+35     distanceKm:   { type: Number, default: 0 },
+36     totalFare:    { type: Number, default: 0 },
+37     fareBreakdown: {
+38       firstKm:   Number,
+39       firstFare: Number,
+40       extraKm:   Number,
+41       extraFare: Number,
+42       total:     Number,
+43     },
+44     cancellationReason: String,
+45     cancelledBy: { type: String, enum: ['passenger', 'captain'] },
+46 
+47     // State-change timestamps (one per transition)
+48     acceptedAt:  Date,
+49     onTheWayAt:  Date,
+50     arrivedAt:   Date,
+51     startedAt:   Date,
+52     endedAt:     Date,
+53     cancelledAt: Date,
+54   },
+55   { timestamps: true }
+56 );
+57 
+58 // Guard method used in trip.service to prevent illegal transitions
+59 tripSchema.methods.canTransitionTo = function (newStatus) {
+60   return (TRANSITIONS[this.status] ?? []).includes(newStatus);
+61 };
+62 
+63 module.exports = mongoose.model('Trip', tripSchema);
+```
+
+## File: `src\modules\trip\trip.repository.js`
+
+```javascript
+1 const Trip = require('./trip.model');
+2 
+3 const _populatedQuery = (query) =>
+4   query
+5     .populate('passengerId', 'name avatar phone')
+6     .populate({ path: 'captainId', populate: { path: 'userId', select: 'name avatar phone' } });
+7 
+8 const findById = (id) => Trip.findById(id);
+9 
+10 const findByIdPopulated = (id) => _populatedQuery(Trip.findById(id));
+11 
+12 const findOne = (filter) => Trip.findOne(filter);
+13 
+14 const findOnePopulated = (filter) => _populatedQuery(Trip.findOne(filter));
+15 
+16 const create = (data) => Trip.create(data);
+17 
+18 const saveDoc = (doc) => doc.save();
+19 
+20 module.exports = { findById, findByIdPopulated, findOne, findOnePopulated, create, saveDoc };
 ```
 
 ## File: `src\modules\trip\trip.routes.js`
@@ -2607,186 +2787,246 @@
 3 const controller = require('./trip.controller');
 4 const authMiddleware = require('../../middlewares/auth.middleware');
 5 const { requireRole } = require('../../middlewares/role.middleware');
-6 
-7 // إنشاء رحلة (يحتاج راكب)
-8 router.post('/', authMiddleware, requireRole('passenger'), controller.createTrip);
-9 
-10 // تأكيد البدء (يمكن للراكب أو الكابتن)
-11 router.patch('/:id/start', authMiddleware, controller.confirmStart);
+6 const { validate } = require('../../middlewares/validate');
+7 const { createTripSchema, endTripSchema, cancelTripSchema } = require('./trip.validation');
+8 
+9 // ── Any authenticated user ────────────────────────────────────────────
+10 // Must be before /:id routes to avoid param capture
+11 router.get('/current', authMiddleware, controller.getCurrentTrip);
 12 
-13 // طلب إنهاء (راكب أو كابتن)
-14 router.patch('/:id/request-end', authMiddleware, controller.requestEnd);
+13 router.get('/:id',        authMiddleware, controller.getTrip);
+14 router.post('/:id/cancel', authMiddleware, validate(cancelTripSchema), controller.cancelTrip);
 15 
-16 // تأكيد إنهاء (راكب أو كابتن)
-17 router.patch('/:id/confirm-end', authMiddleware, controller.confirmEnd);
+16 // ── Passenger only ────────────────────────────────────────────────────
+17 router.post('/', authMiddleware, requireRole('passenger'), validate(createTripSchema), controller.createTrip);
 18 
-19 // إلغاء (راكب أو كابتن)
-20 router.patch('/:id/cancel', authMiddleware, controller.cancelTrip);
-21 
-22 // الحصول على تفاصيل رحلة
-23 router.get('/:id', authMiddleware, controller.getTrip);
-24 
-25 module.exports = router;
+19 // ── Captain only ──────────────────────────────────────────────────────
+20 router.post('/:id/accept',     authMiddleware, requireRole('captain'), controller.acceptTrip);
+21 router.post('/:id/on-the-way', authMiddleware, requireRole('captain'), controller.markOnTheWay);
+22 router.post('/:id/arrived',    authMiddleware, requireRole('captain'), controller.markArrived);
+23 router.post('/:id/start',      authMiddleware, requireRole('captain'), controller.startTrip);
+24 router.post('/:id/end',        authMiddleware, requireRole('captain'), validate(endTripSchema), controller.endTrip);
+25 
+26 module.exports = router;
 ```
 
 ## File: `src\modules\trip\trip.service.js`
 
 ```javascript
-1 const Trip = require('./trip.model');
-2 const Captain = require('../captain/captain.model');
-3 const { calcFare } = require('../../utils/fare.util');
-4 const { emitToTrip } = require('../../socket'); 
-5 const mongoose = require('mongoose');
-6 
-7 const createTrip = async (passengerId, captainId, startLocation) => {
-8   if (!mongoose.Types.ObjectId.isValid(captainId)) {
-9     throw new Error('معرف الكابتن غير صالح');
-10   }
-11 
-12   const captain = await Captain.findById(captainId);
-13   if (!captain || captain.status !== 'approved') {
-14     throw new Error('الكابتن غير متاح');
-15   }
-16   if (!captain.isOnline) {
-17     throw new Error('الكابتن غير متصل حالياً');
-18   }
-19 
-20   const trip = await Trip.create({
-21     passengerId,
-22     captainId: captain._id,
-23     startLocation,
-24     status: 'pending',
-25   });
-26   return trip;
-27 };
+1 const tripRepo = require('./trip.repository');
+2 const captainRepo = require('../captain/captain.repository');
+3 const userRepo = require('../user/user.repository');
+4 const { calcFareBreakdown } = require('../../utils/fare.util');
+5 const { emitToUser, emitToTrip } = require('../../socket');
+6 const logger = require('../../config/logger');
+7 
+8 const ACTIVE_STATUSES = ['searching', 'accepted', 'onTheWay', 'arrived', 'started'];
+9 
+10 // ── Passenger: create trip ────────────────────────────────────────────
+11 const createTrip = async (passengerId, captainId, startLocation) => {
+12   const captain = await captainRepo.findById(captainId);
+13   if (!captain || captain.status !== 'approved') throw new Error('Captain not available');
+14   if (!captain.isOnline) throw new Error('Captain is offline');
+15   if (captain.isOnTrip) throw new Error('Captain is already on a trip');
+16 
+17   const trip = await tripRepo.create({ passengerId, captainId: captain._id, startLocation });
+18 
+19   // Resolve passenger name for the notification payload
+20   const passenger = await userRepo.findById(passengerId);
+21 
+22   // Notify captain — they are identified by their User._id on the socket
+23   emitToUser(captain.userId.toString(), 'trip:request:incoming', {
+24     tripId:    trip._id.toString(),
+25     passenger: { id: passengerId.toString(), name: passenger?.name, avatar: passenger?.avatar },
+26     startLocation,
+27   });
 28 
-29 const confirmStart = async (tripId, userId, role) => {
-30   const trip = await Trip.findById(tripId);
-31   if (!trip) throw new Error('الرحلة غير موجودة');
-32   if (trip.status !== 'pending') throw new Error('الرحلة ليست في حالة انتظار البدء');
-33 
-34   const isPassenger = trip.passengerId.toString() === userId;
-35   const captain = await Captain.findById(trip.captainId);
-36   const isCaptain = captain.userId.toString() === userId;
+29   logger.info(`[Trip] created ${trip._id} | passenger=${passengerId} | captain=${captainId}`);
+30   return trip;
+31 };
+32 
+33 // ── Captain: accept ───────────────────────────────────────────────────
+34 const acceptTrip = async (tripId, captainUserId) => {
+35   const trip = await tripRepo.findById(tripId);
+36   if (!trip) throw new Error('Trip not found');
 37 
-38   if (role === 'passenger' && !isPassenger) throw new Error('غير مصرح لك كراكب');
-39   if (role === 'captain' && !isCaptain) throw new Error('غير مصرح لك ككابتن');
-40 
-41   if (role === 'passenger') trip.passengerConfirmedStart = true;
-42   else if (role === 'captain') trip.captainConfirmedStart = true;
-43 
-44   // ✨ في بيئة التطوير: إذا أكد الراكب، اعتبر الكابتن مؤكداً تلقائياً
-45   if (process.env.NODE_ENV === 'development' && role === 'passenger') {
-46     trip.captainConfirmedStart = true;
-47   }
-48 
-49   if (trip.passengerConfirmedStart && trip.captainConfirmedStart) {
-50     trip.status = 'active';
-51     trip.startedAt = new Date();
-52     await trip.save();
-53     emitToTrip(tripId, 'trip:started', trip);
-54   } else {
-55     await trip.save();
-56   }
-57   return trip;
-58 };
-59 
-60 const requestEndTrip = async (tripId, userId, role) => {
-61   const trip = await Trip.findById(tripId);
-62   if (!trip) throw new Error('الرحلة غير موجودة');
-63   if (trip.status !== 'active') throw new Error('الرحلة غير نشطة');
-64 
-65   const isPassenger = trip.passengerId.toString() === userId;
-66   const captain = await Captain.findById(trip.captainId);
-67   const isCaptain = captain.userId.toString() === userId;
-68 
-69   if (role === 'passenger' && !isPassenger) throw new Error('غير مصرح لك كراكب');
-70   if (role === 'captain' && !isCaptain) throw new Error('غير مصرح لك ككابتن');
-71 
-72   // ✅ لا يمكن تكرار الطلب من نفس الطرف دون رد
-73   if (trip.endRequestedBy === role) throw new Error('أنت بالفعل طلبت إنهاء الرحلة');
+38   const captain = await captainRepo.findByUserIdPopulated(captainUserId);
+39   if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+40   if (!trip.canTransitionTo('accepted')) throw new Error(`Cannot accept from status: ${trip.status}`);
+41 
+42   trip.status = 'accepted';
+43   trip.acceptedAt = new Date();
+44   await tripRepo.saveDoc(trip);
+45 
+46   await captainRepo.updateByUserId(captainUserId, { isOnTrip: true });
+47 
+48   emitToUser(trip.passengerId.toString(), 'trip:accepted', {
+49     tripId: trip._id.toString(),
+50     captain: {
+51       captainId:    captain._id.toString(),
+52       name:         captain.userId?.name,
+53       avatar:       captain.userId?.avatar,
+54       vehicleType:  captain.vehicleType,
+55       vehicleModel: captain.vehicleModel,
+56       vehicleColor: captain.vehicleColor,
+57       plateNumber:  captain.plateNumber,
+58       rating:       captain.rating,
+59     },
+60   });
+61 
+62   logger.info(`[Trip] ${tripId} accepted by ${captainUserId}`);
+63   return tripRepo.findByIdPopulated(tripId);
+64 };
+65 
+66 // ── Captain: status transitions (onTheWay / arrived / started) ────────
+67 const _captainTransition = async (tripId, captainUserId, newStatus) => {
+68   const trip = await tripRepo.findById(tripId);
+69   if (!trip) throw new Error('Trip not found');
+70 
+71   const captain = await captainRepo.findByUserId(captainUserId);
+72   if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+73   if (!trip.canTransitionTo(newStatus)) throw new Error(`Cannot transition to ${newStatus} from ${trip.status}`);
 74 
-75   trip.endRequestedBy = role;
-76   await trip.save();
-77 
-78   // ✅ إشعار الطرف الآخر بطلب إنهاء
-79   emitToTrip(tripId, 'trip:end-requested', { requestedBy: role });
-80 
-81   return trip;
-82 };
-83 
-84 const confirmEndTrip = async (tripId, userId, role, distanceKm) => {
-85   const trip = await Trip.findById(tripId);
-86   if (!trip) throw new Error('الرحلة غير موجودة');
-87   if (trip.status !== 'active') throw new Error('الرحلة غير نشطة');
+75   const tsField = { onTheWay: 'onTheWayAt', arrived: 'arrivedAt', started: 'startedAt' }[newStatus];
+76   trip.status = newStatus;
+77   if (tsField) trip[tsField] = new Date();
+78   await tripRepo.saveDoc(trip);
+79 
+80   emitToTrip(tripId, 'trip:status:update', { tripId, status: newStatus });
+81   logger.info(`[Trip] ${tripId} → ${newStatus}`);
+82   return trip;
+83 };
+84 
+85 const markOnTheWay = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'onTheWay');
+86 const markArrived  = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'arrived');
+87 const startTrip    = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'started');
 88 
-89   const isPassenger = trip.passengerId.toString() === userId;
-90   const captain = await Captain.findById(trip.captainId);
-91   const isCaptain = captain.userId.toString() === userId;
-92 
-93   if (role === 'passenger' && !isPassenger) throw new Error('غير مصرح لك كراكب');
-94   if (role === 'captain' && !isCaptain) throw new Error('غير مصرح لك ككابتن');
-95 
-96   // ✅ التحقق من وجود طلب إنهاء من الطرف الآخر
-97   if (!trip.endRequestedBy || trip.endRequestedBy === role) {
-98     throw new Error('لا يمكن تأكيد إنهاء الرحلة قبل طلب الطرف الآخر');
-99   }
-100 
-101   if (role === 'passenger') trip.passengerConfirmedEnd = true;
-102   else if (role === 'captain') trip.captainConfirmedEnd = true;
-103 
-104   if (trip.passengerConfirmedEnd && trip.captainConfirmedEnd) {
-105     trip.status = 'ended';
-106     trip.endedAt = new Date();
-107     trip.distanceKm = distanceKm;
-108     trip.totalFare = calcFare(distanceKm);
-109     await trip.save();
-110 
-111     // تحديث إحصائيات الكابتن
-112     await Captain.findByIdAndUpdate(trip.captainId, {
-113       $inc: { totalTrips: 1 },
-114     });
-115 
-116     // ✅ إشعار الطرفين بانتهاء الرحلة
-117     emitToTrip(tripId, 'trip:ended', trip);
-118   } else {
-119     await trip.save();
-120   }
-121   return trip;
-122 };
-123 
-124 const cancelTrip = async (tripId, userId, reason) => {
-125   const trip = await Trip.findById(tripId);
-126   if (!trip) throw new Error('الرحلة غير موجودة');
-127   if (trip.status !== 'pending') throw new Error('لا يمكن إلغاء الرحلة في هذه الحالة');
-128 
-129   const isPassenger = trip.passengerId.toString() === userId;
-130   const captain = await Captain.findById(trip.captainId);
-131   const isCaptain = captain.userId.toString() === userId;
+89 // ── Captain: end trip ─────────────────────────────────────────────────
+90 const endTrip = async (tripId, captainUserId, distanceKm) => {
+91   const trip = await tripRepo.findById(tripId);
+92   if (!trip) throw new Error('Trip not found');
+93 
+94   const captain = await captainRepo.findByUserId(captainUserId);
+95   if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+96   if (!trip.canTransitionTo('ended')) throw new Error(`Cannot end from status: ${trip.status}`);
+97 
+98   const fare = calcFareBreakdown(distanceKm);
+99   trip.status = 'ended';
+100   trip.endedAt = new Date();
+101   trip.distanceKm = distanceKm;
+102   trip.totalFare = fare.total;
+103   trip.fareBreakdown = fare;
+104   await tripRepo.saveDoc(trip);
+105 
+106   await captainRepo.updateByUserId(captainUserId, { isOnTrip: false, $inc: { totalTrips: 1 } });
+107 
+108   emitToTrip(tripId, 'trip:status:update', { tripId, status: 'ended', fare });
+109   logger.info(`[Trip] ${tripId} ended | km=${distanceKm} | fare=${fare.total}`);
+110   return trip;
+111 };
+112 
+113 // ── Either party: cancel ──────────────────────────────────────────────
+114 const cancelTrip = async (tripId, userId, role, reason) => {
+115   const trip = await tripRepo.findById(tripId);
+116   if (!trip) throw new Error('Trip not found');
+117   if (!trip.canTransitionTo('cancelled')) throw new Error('Cannot cancel trip in current state');
+118 
+119   if (role === 'passenger') {
+120     if (trip.passengerId.toString() !== userId.toString()) throw new Error('Unauthorized');
+121   } else if (role === 'captain') {
+122     const captain = await captainRepo.findByUserId(userId);
+123     if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+124     await captainRepo.updateByUserId(userId, { isOnTrip: false });
+125   }
+126 
+127   trip.status = 'cancelled';
+128   trip.cancelledAt = new Date();
+129   trip.cancellationReason = reason || null;
+130   trip.cancelledBy = role;
+131   await tripRepo.saveDoc(trip);
 132 
-133   if (!isPassenger && !isCaptain) throw new Error('غير مصرح لك');
-134 
-135   trip.status = 'cancelled';
-136   trip.cancellationReason = reason;
-137   await trip.save();
-138   emitToTrip(tripId, 'trip:cancelled', trip);
-139   return trip;
-140 };
-141 
-142 const getTrip = async (tripId) => {
-143   return await Trip.findById(tripId)
-144     .populate('passengerId', 'name phone avatar')
-145     .populate('captainId', 'userId vehicleType vehicleModel plateNumber rating totalTrips');
-146 };
-147 
-148 module.exports = {
-149   createTrip,
-150   confirmStart,
-151   requestEndTrip,
-152   confirmEndTrip,
-153   cancelTrip,
-154   getTrip,
-155 };
+133   emitToTrip(tripId, 'trip:cancelled', { tripId, reason: reason || null, cancelledBy: role });
+134   logger.info(`[Trip] ${tripId} cancelled by ${role}`);
+135   return trip;
+136 };
+137 
+138 // ── GET /trips/current ────────────────────────────────────────────────
+139 const getCurrentTrip = async (userId, role) => {
+140   if (role === 'passenger') {
+141     return tripRepo.findOnePopulated({ passengerId: userId, status: { $in: ACTIVE_STATUSES } });
+142   }
+143   if (role === 'captain') {
+144     const captain = await captainRepo.findByUserId(userId);
+145     if (!captain) return null;
+146     return tripRepo.findOnePopulated({ captainId: captain._id, status: { $in: ACTIVE_STATUSES } });
+147   }
+148   return null;
+149 };
+150 
+151 const getTrip = (tripId) => tripRepo.findByIdPopulated(tripId);
+152 
+153 module.exports = {
+154   createTrip,
+155   acceptTrip,
+156   markOnTheWay,
+157   markArrived,
+158   startTrip,
+159   endTrip,
+160   cancelTrip,
+161   getCurrentTrip,
+162   getTrip,
+163 };
+```
+
+## File: `src\modules\trip\trip.socket.js`
+
+```javascript
+1 // Trip socket handler — manages room membership for realtime trip updates.
+2 // Business logic (state transitions) stays in trip.service; this file only
+3 // handles the socket plumbing.
+4 const register = (io, socket) => {
+5   // Client joins trip room to receive realtime status updates + location
+6   socket.on('trip:join', (tripId) => {
+7     if (!tripId) return;
+8     socket.join(`trip:${tripId}`);
+9     socket.data.activeTripId = tripId;
+10   });
+11 
+12   socket.on('trip:leave', (tripId) => {
+13     if (!tripId) return;
+14     socket.leave(`trip:${tripId}`);
+15     if (socket.data.activeTripId === tripId) {
+16       socket.data.activeTripId = null;
+17     }
+18   });
+19 };
+20 
+21 module.exports = { register };
+```
+
+## File: `src\modules\trip\trip.validation.js`
+
+```javascript
+1 const Joi = require('joi');
+2 
+3 const createTripSchema = Joi.object({
+4   captainId: Joi.string().hex().length(24).required(),
+5   startLocation: Joi.object({
+6     lat:     Joi.number().min(-90).max(90).required(),
+7     lng:     Joi.number().min(-180).max(180).required(),
+8     address: Joi.string().optional(),
+9   }).required(),
+10 });
+11 
+12 const endTripSchema = Joi.object({
+13   distanceKm: Joi.number().min(0).required(),
+14 });
+15 
+16 const cancelTripSchema = Joi.object({
+17   reason: Joi.string().max(300).optional().allow('', null),
+18 });
+19 
+20 module.exports = { createTripSchema, endTripSchema, cancelTripSchema };
 ```
 
 ## File: `src\modules\user\user.model.js`
@@ -2810,12 +3050,35 @@
 16     // For OTP temporary storage
 17     otpCode: { type: String },
 18     otpExpiresAt: { type: Date },
-19     refreshToken: { type: String },
-20   },
-21   { timestamps: true }
-22 );
-23 
-24 module.exports = mongoose.model('User', userSchema);
+19     // Array supports multiple devices (max 5, FIFO)
+20     refreshTokens: [{ type: String }],
+21   },
+22   { timestamps: true }
+23 );
+24 
+25 module.exports = mongoose.model('User', userSchema);
+```
+
+## File: `src\modules\user\user.repository.js`
+
+```javascript
+1 const User = require('./user.model');
+2 
+3 const findById = (id, projection = '-refreshToken') =>
+4   User.findById(id).select(projection);
+5 
+6 const findOne = (filter, projection) =>
+7   User.findOne(filter, projection);
+8 
+9 const create = (data) => User.create(data);
+10 
+11 const updateById = (id, update, options = {}) =>
+12   User.findByIdAndUpdate(id, update, { new: true, ...options });
+13 
+14 const updateOne = (filter, update) =>
+15   User.findOneAndUpdate(filter, update, { new: true });
+16 
+17 module.exports = { findById, findOne, create, updateById, updateOne };
 ```
 
 ## File: `src\modules\vehicle\vehicle.model.js`
@@ -2840,180 +3103,84 @@
 ## File: `src\socket\index.js`
 
 ```javascript
-1 // src/socket/index.js
-2 const { Server } = require('socket.io');
-3 const env = require('../config/env');
-4 const tripService = require('../modules/trip/trip.service');
-5 const Captain = require('../modules/captain/captain.model');
-6 
-7 let io;
-8 const userSockets = new Map(); // userId -> socketId
-9 const socketToUser = new Map(); // socketId -> userId
-10 
-11 /**
-12  * Initialize Socket.IO server
-13  * @param {http.Server} server - HTTP server instance
-14  * @returns {Server} Socket.IO instance
-15  */
-16 const initSocket = (server) => {
-17   io = new Server(server, {
-18     cors: {
-19       origin: env.SOCKET_CORS_ORIGIN || '*',
-20       methods: ['GET', 'POST'],
-21       credentials: true,
-22     },
-23   });
-24 
-25   io.on('connection', (socket) => {
-26     console.log(`🔌 New client connected: ${socket.id}`);
-27 
-28     // Register user (called from client after authentication)
-29     socket.on('register', (userId) => {
-30       if (!userId) return;
-31       // Remove old socket if exists
-32       const oldSocketId = userSockets.get(userId);
-33       if (oldSocketId) {
-34         socketToUser.delete(oldSocketId);
-35       }
-36       userSockets.set(userId, socket.id);
-37       socketToUser.set(socket.id, userId);
-38       console.log(`✅ User ${userId} registered with socket ${socket.id}`);
-39     });
-40 
-41     // Join a trip room (for real-time updates during a trip)
-42     socket.on('join-trip', (tripId) => {
-43       if (!tripId) return;
-44       socket.join(`trip-${tripId}`);
-45       console.log(`🚗 Socket ${socket.id} joined room trip-${tripId}`);
-46     });
-47 
-48     // Leave trip room
-49     socket.on('leave-trip', (tripId) => {
-50       if (!tripId) return;
-51       socket.leave(`trip-${tripId}`);
-52     });
-53 
-54     // Captain updates location
-55     socket.on('captain:location', async (data) => {
-56       const { captainId, lat, lng } = data;
-57       if (!captainId || lat == null || lng == null) return;
-58 
-59       try {
-60         // Update captain's location in DB
-61         await Captain.updateOne(
-62           { userId: captainId, isOnline: true },
-63           {
-64             $set: {
-65               location: { type: 'Point', coordinates: [lng, lat] },
-66               lastLocationAt: new Date(),
-67             },
-68           }
-69         );
-70         // Optionally broadcast to nearby passengers (can be implemented later)
-71         // For now, we just store the location; passengers will fetch via REST API.
-72       } catch (err) {
-73         console.error('Error updating captain location:', err);
-74       }
-75     });
-76 
-77     // Trip: start confirmation (both passenger & captain)
-78     socket.on('trip:start', async (data) => {
-79       const { tripId, userId, role } = data;
-80       if (!tripId || !userId || !role) return;
-81 
-82       try {
-83         const trip = await tripService.confirmStart(tripId, userId, role);
-84         // Notify both parties that trip has started (if both confirmed)
-85         if (trip.status === 'active') {
-86           io.to(`trip-${tripId}`).emit('trip:started', trip);
-87         } else {
-88           // Just acknowledge that this side confirmed
-89           socket.emit('trip:confirmed-start', { tripId, role });
-90         }
-91       } catch (err) {
-92         socket.emit('error', { message: err.message });
-93       }
-94     });
-95 
-96     // Trip: request end (passenger or captain)
-97     socket.on('trip:end-request', async (data) => {
-98       const { tripId, userId, role } = data;
-99       if (!tripId || !userId || !role) return;
-100 
-101       try {
-102         const trip = await tripService.requestEndTrip(tripId, userId, role);
-103         io.to(`trip-${tripId}`).emit('trip:end-requested', { requestedBy: role });
-104       } catch (err) {
-105         socket.emit('error', { message: err.message });
-106       }
-107     });
-108 
-109     // Trip: confirm end (passenger or captain)
-110     socket.on('trip:end-confirm', async (data) => {
-111       const { tripId, userId, role, distanceKm } = data;
-112       if (!tripId || !userId || !role || distanceKm == null) return;
-113 
-114       try {
-115         const trip = await tripService.confirmEndTrip(tripId, userId, role, distanceKm);
-116         if (trip.status === 'ended') {
-117           io.to(`trip-${tripId}`).emit('trip:ended', trip);
-118         } else {
-119           socket.emit('trip:confirmed-end', { tripId, role });
-120         }
-121       } catch (err) {
-122         socket.emit('error', { message: err.message });
-123       }
-124     });
-125 
-126     // Disconnect
-127     socket.on('disconnect', () => {
-128       const userId = socketToUser.get(socket.id);
-129       if (userId) {
-130         userSockets.delete(userId);
-131         socketToUser.delete(socket.id);
-132         console.log(`❌ User ${userId} disconnected (socket ${socket.id})`);
-133       } else {
-134         console.log(`❌ Socket ${socket.id} disconnected`);
-135       }
-136     });
-137   });
-138 
-139   return io;
-140 };
-141 
-142 /**
-143  * Get Socket.IO instance (must be called after initSocket)
-144  * @returns {Server}
-145  */
-146 const getIo = () => {
-147   if (!io) throw new Error('Socket.IO not initialized');
-148   return io;
-149 };
-150 
-151 /**
-152  * Emit event to a specific user
-153  * @param {string} userId - User ID
-154  * @param {string} event - Event name
-155  * @param {any} data - Event data
-156  */
-157 const emitToUser = (userId, event, data) => {
-158   const socketId = userSockets.get(userId);
-159   if (socketId) {
-160     io.to(socketId).emit(event, data);
-161   }
-162 };
-163 
-164 /**
-165  * Emit event to a trip room
-166  * @param {string} tripId - Trip ID
-167  * @param {string} event - Event name
-168  * @param {any} data - Event data
-169  */
-170 const emitToTrip = (tripId, event, data) => {
-171   io.to(`trip-${tripId}`).emit(event, data);
-172 };
-173 
-174 module.exports = { initSocket, getIo, emitToUser, emitToTrip };
+1 const { Server } = require('socket.io');
+2 const env = require('../config/env');
+3 const { verifyAccessToken } = require('../utils/jwt.util');
+4 const logger = require('../config/logger');
+5 
+6 let io;
+7 
+8 const initSocket = (server) => {
+9   io = new Server(server, {
+10     cors: {
+11       origin: env.SOCKET_CORS_ORIGIN || '*',
+12       methods: ['GET', 'POST'],
+13       credentials: true,
+14     },
+15   });
+16 
+17   // JWT auth middleware — runs before every connection
+18   io.use((socket, next) => {
+19     const authHeader = socket.handshake.headers.authorization;
+20     if (!authHeader?.startsWith('Bearer ')) {
+21       return next(new Error('UNAUTHORIZED'));
+22     }
+23     const token = authHeader.split(' ')[1];
+24     const decoded = verifyAccessToken(token);
+25     if (!decoded) {
+26       return next(new Error('INVALID_TOKEN'));
+27     }
+28     socket.data.userId = decoded.id.toString();
+29     socket.data.role = decoded.role;
+30     next();
+31   });
+32 
+33   io.on('connection', (socket) => {
+34     const { userId, role } = socket.data;
+35     logger.info(`[Socket] connected ${socket.id} | user=${userId} | role=${role}`);
+36 
+37     // Personal room — enables targeted messages to any user
+38     socket.join(`user:${userId}`);
+39 
+40     // Role rooms
+41     if (role === 'passenger') socket.join('passengers');
+42 
+43     // Register per-module handlers (lazy require avoids circular deps at load time)
+44     require('../modules/captain/captain.socket').register(io, socket);
+45     require('../modules/trip/trip.socket').register(io, socket);
+46 
+47     socket.on('disconnect', (reason) => {
+48       logger.info(`[Socket] disconnected ${socket.id} | user=${userId} | reason=${reason}`);
+49     });
+50   });
+51 
+52   return io;
+53 };
+54 
+55 const getIo = () => {
+56   if (!io) throw new Error('Socket.IO not initialized');
+57   return io;
+58 };
+59 
+60 // Emit to a specific user's personal room
+61 const emitToUser = (userId, event, data) => {
+62   if (!io) return;
+63   io.to(`user:${userId}`).emit(event, data);
+64 };
+65 
+66 // Emit to all sockets inside a trip room
+67 const emitToTrip = (tripId, event, data) => {
+68   if (!io) return;
+69   io.to(`trip:${tripId}`).emit(event, data);
+70 };
+71 
+72 // Emit to all online passengers
+73 const emitToPassengers = (event, data) => {
+74   if (!io) return;
+75   io.to('passengers').emit(event, data);
+76 };
+77 
+78 module.exports = { initSocket, getIo, emitToUser, emitToTrip, emitToPassengers };
 ```
 
 ## File: `src\utils\code.util.js`

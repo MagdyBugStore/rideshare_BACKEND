@@ -40,6 +40,7 @@ const captainSchema = new mongoose.Schema(
     isOnline: { type: Boolean, default: false },
     isOnTrip: { type: Boolean, default: false },
     socketId: { type: String },
+    lastActiveAt: { type: Date },
 
     // Location (GeoJSON)
     location: {

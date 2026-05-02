@@ -16,7 +16,8 @@ const userSchema = new mongoose.Schema(
     // For OTP temporary storage
     otpCode: { type: String },
     otpExpiresAt: { type: Date },
-    refreshToken: { type: String },
+    // Array supports multiple devices (max 5, FIFO)
+    refreshTokens: [{ type: String }],
   },
   { timestamps: true }
 );

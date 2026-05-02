@@ -33,7 +33,6 @@ const loginWithGoogle = async (idToken) => {
 const sendOtp = async (phone) => {
   let user = await userRepo.findOne({ phone });
 
-  // Create user with phone as placeholder name if new
   if (!user) {
     user = await userRepo.create({ name: phone, phone, role: null });
   }
@@ -50,8 +49,6 @@ const sendOtp = async (phone) => {
   return {
     message: 'OTP sent',
     expiresIn: OTP_TTL_SECONDS,
-    isNewUser: !user.googleId && !user.name?.includes(phone) === false,
-    // Only expose in development for easy testing
     ...(env.NODE_ENV !== 'production' && { devOtp: otp }),
   };
 };
@@ -72,11 +69,9 @@ const verifyOtpAndLogin = async (phone, code, name) => {
 
   if (!verifyOtp(code, user.otpCode)) throw new Error('Invalid OTP');
 
-  // Clear OTP fields
   user.otpCode = undefined;
   user.otpExpiresAt = undefined;
 
-  // Update name if provided (useful for new users completing profile)
   if (name && (user.name === user.phone || !user.name)) {
     user.name = name;
   }
@@ -88,24 +83,33 @@ const verifyOtpAndLogin = async (phone, code, name) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Refresh token
+// Refresh token (with rotation)
 // ─────────────────────────────────────────────────────────────
-const refreshAccessToken = async (refreshToken) => {
-  const decoded = verifyRefreshToken(refreshToken);
+const refreshAccessToken = async (token) => {
+  const decoded = verifyRefreshToken(token);
   if (!decoded) throw new Error('Invalid refresh token');
 
-  const user = await authRepo.findByIdAndToken(decoded.id, refreshToken);
+  const user = await authRepo.findByIdAndToken(decoded.id, token);
   if (!user) throw new Error('Refresh token not found or revoked');
 
-  const { accessToken } = generateTokens(user._id, user.role);
-  return { accessToken };
+  const { accessToken, refreshToken: newRefresh } = generateTokens(user._id, user.role);
+
+  // Rotate: invalidate old token, register new one
+  await authRepo.removeRefreshToken(user._id, token);
+  await authRepo.addRefreshToken(user._id, newRefresh);
+
+  return { accessToken, refreshToken: newRefresh };
 };
 
 // ─────────────────────────────────────────────────────────────
-// Logout
+// Logout — single device (specific token) or all devices
 // ─────────────────────────────────────────────────────────────
-const logout = async (userId) => {
-  await authRepo.clearRefreshToken(userId);
+const logout = async (userId, refreshToken) => {
+  if (refreshToken) {
+    await authRepo.removeRefreshToken(userId, refreshToken);
+  } else {
+    await authRepo.clearAllRefreshTokens(userId);
+  }
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -113,11 +117,9 @@ const logout = async (userId) => {
 // ─────────────────────────────────────────────────────────────
 async function _issueTokens(user) {
   const { accessToken, refreshToken } = generateTokens(user._id, user.role);
-  user.refreshToken = refreshToken;
-  await authRepo.saveDoc(user);
-  // Exclude sensitive fields from response
+  await authRepo.addRefreshToken(user._id, refreshToken);
   const safe = user.toObject();
-  delete safe.refreshToken;
+  delete safe.refreshTokens;
   delete safe.otpCode;
   delete safe.otpExpiresAt;
   return { user: safe, accessToken, refreshToken };
