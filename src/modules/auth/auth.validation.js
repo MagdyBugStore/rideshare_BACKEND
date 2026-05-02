@@ -14,6 +14,16 @@ const registerCaptainSchema = Joi.object({
   plateNumber: Joi.string().min(3).max(20).required(),
 });
 
+const sendOtpSchema = Joi.object({
+  phone: Joi.string().pattern(/^01[0-9]{9}$/).required(),
+});
+
+const verifyOtpSchema = Joi.object({
+  phone: Joi.string().pattern(/^01[0-9]{9}$/).required(),
+  code: Joi.string().length(6).required(),
+  name: Joi.string().min(2).max(50).optional(),
+});
+
 const toggleOnlineSchema = Joi.object({
   isOnline: Joi.boolean().required(),
 });
@@ -27,6 +37,8 @@ const profileUpdateSchema = Joi.object({
 
 module.exports = {
   googleSchema,
+  sendOtpSchema,
+  verifyOtpSchema,
   refreshSchema,
   registerCaptainSchema,
   toggleOnlineSchema,

@@ -1,155 +1,163 @@
-const Trip = require('./trip.model');
-const Captain = require('../captain/captain.model');
-const { calcFare } = require('../../utils/fare.util');
-const { emitToTrip } = require('../../socket'); 
-const mongoose = require('mongoose');
+const tripRepo = require('./trip.repository');
+const captainRepo = require('../captain/captain.repository');
+const userRepo = require('../user/user.repository');
+const { calcFareBreakdown } = require('../../utils/fare.util');
+const { emitToUser, emitToTrip } = require('../../socket');
+const logger = require('../../config/logger');
 
+const ACTIVE_STATUSES = ['searching', 'accepted', 'onTheWay', 'arrived', 'started'];
+
+// ── Passenger: create trip ────────────────────────────────────────────
 const createTrip = async (passengerId, captainId, startLocation) => {
-  if (!mongoose.Types.ObjectId.isValid(captainId)) {
-    throw new Error('معرف الكابتن غير صالح');
-  }
+  const captain = await captainRepo.findById(captainId);
+  if (!captain || captain.status !== 'approved') throw new Error('Captain not available');
+  if (!captain.isOnline) throw new Error('Captain is offline');
+  if (captain.isOnTrip) throw new Error('Captain is already on a trip');
 
-  const captain = await Captain.findById(captainId);
-  if (!captain || captain.status !== 'approved') {
-    throw new Error('الكابتن غير متاح');
-  }
-  if (!captain.isOnline) {
-    throw new Error('الكابتن غير متصل حالياً');
-  }
+  const trip = await tripRepo.create({ passengerId, captainId: captain._id, startLocation });
 
-  const trip = await Trip.create({
-    passengerId,
-    captainId: captain._id,
+  // Resolve passenger name for the notification payload
+  const passenger = await userRepo.findById(passengerId);
+
+  // Notify captain — they are identified by their User._id on the socket
+  emitToUser(captain.userId.toString(), 'trip:request:incoming', {
+    tripId:    trip._id.toString(),
+    passenger: { id: passengerId.toString(), name: passenger?.name, avatar: passenger?.avatar },
     startLocation,
-    status: 'pending',
   });
+
+  logger.info(`[Trip] created ${trip._id} | passenger=${passengerId} | captain=${captainId}`);
   return trip;
 };
 
-const confirmStart = async (tripId, userId, role) => {
-  const trip = await Trip.findById(tripId);
-  if (!trip) throw new Error('الرحلة غير موجودة');
-  if (trip.status !== 'pending') throw new Error('الرحلة ليست في حالة انتظار البدء');
+// ── Captain: accept ───────────────────────────────────────────────────
+const acceptTrip = async (tripId, captainUserId) => {
+  const trip = await tripRepo.findById(tripId);
+  if (!trip) throw new Error('Trip not found');
 
-  const isPassenger = trip.passengerId.toString() === userId;
-  const captain = await Captain.findById(trip.captainId);
-  const isCaptain = captain.userId.toString() === userId;
+  const captain = await captainRepo.findByUserIdPopulated(captainUserId);
+  if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+  if (!trip.canTransitionTo('accepted')) throw new Error(`Cannot accept from status: ${trip.status}`);
 
-  if (role === 'passenger' && !isPassenger) throw new Error('غير مصرح لك كراكب');
-  if (role === 'captain' && !isCaptain) throw new Error('غير مصرح لك ككابتن');
+  trip.status = 'accepted';
+  trip.acceptedAt = new Date();
+  await tripRepo.saveDoc(trip);
 
-  if (role === 'passenger') trip.passengerConfirmedStart = true;
-  else if (role === 'captain') trip.captainConfirmedStart = true;
+  await captainRepo.updateByUserId(captainUserId, { isOnTrip: true });
 
-  // ✨ في بيئة التطوير: إذا أكد الراكب، اعتبر الكابتن مؤكداً تلقائياً
-  if (process.env.NODE_ENV === 'development' && role === 'passenger') {
-    trip.captainConfirmedStart = true;
-  }
+  emitToUser(trip.passengerId.toString(), 'trip:accepted', {
+    tripId: trip._id.toString(),
+    captain: {
+      captainId:    captain._id.toString(),
+      name:         captain.userId?.name,
+      avatar:       captain.userId?.avatar,
+      vehicleType:  captain.vehicleType,
+      vehicleModel: captain.vehicleModel,
+      vehicleColor: captain.vehicleColor,
+      plateNumber:  captain.plateNumber,
+      rating:       captain.rating,
+    },
+  });
 
-  if (trip.passengerConfirmedStart && trip.captainConfirmedStart) {
-    trip.status = 'active';
-    trip.startedAt = new Date();
-    await trip.save();
-    emitToTrip(tripId, 'trip:started', trip);
-  } else {
-    await trip.save();
-  }
+  logger.info(`[Trip] ${tripId} accepted by ${captainUserId}`);
+  return tripRepo.findByIdPopulated(tripId);
+};
+
+// ── Captain: status transitions (onTheWay / arrived / started) ────────
+const _captainTransition = async (tripId, captainUserId, newStatus) => {
+  const trip = await tripRepo.findById(tripId);
+  if (!trip) throw new Error('Trip not found');
+
+  const captain = await captainRepo.findByUserId(captainUserId);
+  if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+  if (!trip.canTransitionTo(newStatus)) throw new Error(`Cannot transition to ${newStatus} from ${trip.status}`);
+
+  const tsField = { onTheWay: 'onTheWayAt', arrived: 'arrivedAt', started: 'startedAt' }[newStatus];
+  trip.status = newStatus;
+  if (tsField) trip[tsField] = new Date();
+  await tripRepo.saveDoc(trip);
+
+  emitToTrip(tripId, 'trip:status:update', { tripId, status: newStatus });
+  logger.info(`[Trip] ${tripId} → ${newStatus}`);
   return trip;
 };
 
-const requestEndTrip = async (tripId, userId, role) => {
-  const trip = await Trip.findById(tripId);
-  if (!trip) throw new Error('الرحلة غير موجودة');
-  if (trip.status !== 'active') throw new Error('الرحلة غير نشطة');
+const markOnTheWay = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'onTheWay');
+const markArrived  = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'arrived');
+const startTrip    = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'started');
 
-  const isPassenger = trip.passengerId.toString() === userId;
-  const captain = await Captain.findById(trip.captainId);
-  const isCaptain = captain.userId.toString() === userId;
+// ── Captain: end trip ─────────────────────────────────────────────────
+const endTrip = async (tripId, captainUserId, distanceKm) => {
+  const trip = await tripRepo.findById(tripId);
+  if (!trip) throw new Error('Trip not found');
 
-  if (role === 'passenger' && !isPassenger) throw new Error('غير مصرح لك كراكب');
-  if (role === 'captain' && !isCaptain) throw new Error('غير مصرح لك ككابتن');
+  const captain = await captainRepo.findByUserId(captainUserId);
+  if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+  if (!trip.canTransitionTo('ended')) throw new Error(`Cannot end from status: ${trip.status}`);
 
-  // ✅ لا يمكن تكرار الطلب من نفس الطرف دون رد
-  if (trip.endRequestedBy === role) throw new Error('أنت بالفعل طلبت إنهاء الرحلة');
+  const fare = calcFareBreakdown(distanceKm);
+  trip.status = 'ended';
+  trip.endedAt = new Date();
+  trip.distanceKm = distanceKm;
+  trip.totalFare = fare.total;
+  trip.fareBreakdown = fare;
+  await tripRepo.saveDoc(trip);
 
-  trip.endRequestedBy = role;
-  await trip.save();
+  await captainRepo.updateByUserId(captainUserId, { isOnTrip: false, $inc: { totalTrips: 1 } });
 
-  // ✅ إشعار الطرف الآخر بطلب إنهاء
-  emitToTrip(tripId, 'trip:end-requested', { requestedBy: role });
-
+  emitToTrip(tripId, 'trip:status:update', { tripId, status: 'ended', fare });
+  logger.info(`[Trip] ${tripId} ended | km=${distanceKm} | fare=${fare.total}`);
   return trip;
 };
 
-const confirmEndTrip = async (tripId, userId, role, distanceKm) => {
-  const trip = await Trip.findById(tripId);
-  if (!trip) throw new Error('الرحلة غير موجودة');
-  if (trip.status !== 'active') throw new Error('الرحلة غير نشطة');
+// ── Either party: cancel ──────────────────────────────────────────────
+const cancelTrip = async (tripId, userId, role, reason) => {
+  const trip = await tripRepo.findById(tripId);
+  if (!trip) throw new Error('Trip not found');
+  if (!trip.canTransitionTo('cancelled')) throw new Error('Cannot cancel trip in current state');
 
-  const isPassenger = trip.passengerId.toString() === userId;
-  const captain = await Captain.findById(trip.captainId);
-  const isCaptain = captain.userId.toString() === userId;
-
-  if (role === 'passenger' && !isPassenger) throw new Error('غير مصرح لك كراكب');
-  if (role === 'captain' && !isCaptain) throw new Error('غير مصرح لك ككابتن');
-
-  // ✅ التحقق من وجود طلب إنهاء من الطرف الآخر
-  if (!trip.endRequestedBy || trip.endRequestedBy === role) {
-    throw new Error('لا يمكن تأكيد إنهاء الرحلة قبل طلب الطرف الآخر');
+  if (role === 'passenger') {
+    if (trip.passengerId.toString() !== userId.toString()) throw new Error('Unauthorized');
+  } else if (role === 'captain') {
+    const captain = await captainRepo.findByUserId(userId);
+    if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+    await captainRepo.updateByUserId(userId, { isOnTrip: false });
   }
-
-  if (role === 'passenger') trip.passengerConfirmedEnd = true;
-  else if (role === 'captain') trip.captainConfirmedEnd = true;
-
-  if (trip.passengerConfirmedEnd && trip.captainConfirmedEnd) {
-    trip.status = 'ended';
-    trip.endedAt = new Date();
-    trip.distanceKm = distanceKm;
-    trip.totalFare = calcFare(distanceKm);
-    await trip.save();
-
-    // تحديث إحصائيات الكابتن
-    await Captain.findByIdAndUpdate(trip.captainId, {
-      $inc: { totalTrips: 1 },
-    });
-
-    // ✅ إشعار الطرفين بانتهاء الرحلة
-    emitToTrip(tripId, 'trip:ended', trip);
-  } else {
-    await trip.save();
-  }
-  return trip;
-};
-
-const cancelTrip = async (tripId, userId, reason) => {
-  const trip = await Trip.findById(tripId);
-  if (!trip) throw new Error('الرحلة غير موجودة');
-  if (trip.status !== 'pending') throw new Error('لا يمكن إلغاء الرحلة في هذه الحالة');
-
-  const isPassenger = trip.passengerId.toString() === userId;
-  const captain = await Captain.findById(trip.captainId);
-  const isCaptain = captain.userId.toString() === userId;
-
-  if (!isPassenger && !isCaptain) throw new Error('غير مصرح لك');
 
   trip.status = 'cancelled';
-  trip.cancellationReason = reason;
-  await trip.save();
-  emitToTrip(tripId, 'trip:cancelled', trip);
+  trip.cancelledAt = new Date();
+  trip.cancellationReason = reason || null;
+  trip.cancelledBy = role;
+  await tripRepo.saveDoc(trip);
+
+  emitToTrip(tripId, 'trip:cancelled', { tripId, reason: reason || null, cancelledBy: role });
+  logger.info(`[Trip] ${tripId} cancelled by ${role}`);
   return trip;
 };
 
-const getTrip = async (tripId) => {
-  return await Trip.findById(tripId)
-    .populate('passengerId', 'name phone avatar')
-    .populate('captainId', 'userId vehicleType vehicleModel plateNumber rating totalTrips');
+// ── GET /trips/current ────────────────────────────────────────────────
+const getCurrentTrip = async (userId, role) => {
+  if (role === 'passenger') {
+    return tripRepo.findOnePopulated({ passengerId: userId, status: { $in: ACTIVE_STATUSES } });
+  }
+  if (role === 'captain') {
+    const captain = await captainRepo.findByUserId(userId);
+    if (!captain) return null;
+    return tripRepo.findOnePopulated({ captainId: captain._id, status: { $in: ACTIVE_STATUSES } });
+  }
+  return null;
 };
+
+const getTrip = (tripId) => tripRepo.findByIdPopulated(tripId);
 
 module.exports = {
   createTrip,
-  confirmStart,
-  requestEndTrip,
-  confirmEndTrip,
+  acceptTrip,
+  markOnTheWay,
+  markArrived,
+  startTrip,
+  endTrip,
   cancelTrip,
+  getCurrentTrip,
   getTrip,
 };

@@ -1,5 +1,3 @@
-// src/modules/captain/captain.model.js
-
 const mongoose = require('mongoose');
 
 const captainSchema = new mongoose.Schema(
@@ -14,28 +12,16 @@ const captainSchema = new mongoose.Schema(
       type: String,
       enum: ['car', 'motorcycle', 'tukutuk', 'alt_tukutuk'],
     },
-    vehicleModel: {
-      type: String,
-      // غير مطلوب
-    },
-    plateNumber: {
-      type: String,
-      unique: true,
-      sparse: true,
-    },
-    vehicleColor: {
-      type: String,
-    },
-    lastLocationAt: {
-      type: Date,
-    },
+    vehicleModel: String,
+    plateNumber: { type: String, unique: true, sparse: true },
+    vehicleColor: String,
     documents: {
       nationalId: String,
       driverLicense: String,
       vehicleLicense: String,
       governorate: String,
       address: String,
-      dateOfBirth: { type: String },
+      dateOfBirth: String,
     },
     status: {
       type: String,
@@ -43,40 +29,33 @@ const captainSchema = new mongoose.Schema(
       default: 'pending_review',
     },
     rejectionReason: String,
-    isOnline: {
-      type: Boolean,
-      default: false,
-    },
-    location: {
-      type: { type: String, enum: ['Point'], default: 'Point' },
-      coordinates: { type: [Number], default: [0, 0] },
-    },
-    rating: {
-      type: Number,
-      min: 0,
-      max: 5,
-      default: 0,
-    },
-    totalTrips: {
-      type: Number,
-      default: 0,
-    },
-    applicationCode: {
-      type: String,
-      unique: true,
-      sparse: true,
-    },
+    applicationCode: { type: String, unique: true, sparse: true },
     applicationStatus: {
       type: String,
       enum: ['pending_approval', 'approved', 'rejected'],
       default: 'pending_approval',
     },
+
+    // Availability & presence
+    isOnline: { type: Boolean, default: false },
+    isOnTrip: { type: Boolean, default: false },
+    socketId: { type: String },
+
+    // Location (GeoJSON)
+    location: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], default: [0, 0] },
+    },
+    heading: { type: Number, default: 0 },
+    lastLocationAt: Date,
+
+    // Stats
+    rating: { type: Number, min: 0, max: 5, default: 0 },
+    totalTrips: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
 
-// فهرس جغرافي
 captainSchema.index({ location: '2dsphere' });
 
-const Captain = mongoose.model('Captain', captainSchema);
-module.exports = Captain;
+module.exports = mongoose.model('Captain', captainSchema);

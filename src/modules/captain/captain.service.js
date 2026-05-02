@@ -1,145 +1,123 @@
-const Captain = require('./captain.model');
-const User = require('../user/user.model');
-// ---------- Register Captain (called from controller) ----------
-const registerCaptain = async (userId, data) => {
-  const existing = await Captain.findOne({ userId });
-  if (existing) throw new Error('Captain already registered');
+const captainRepo = require('./captain.repository');
+const userRepo = require('../user/user.repository');
+const { generateApplicationCode } = require('../../utils/code.util');
 
-  const captain = await Captain.create({
+const registerCaptain = async (userId, data) => {
+  const existing = await captainRepo.findByUserId(userId);
+  if (existing) throw new Error('Captain already registered');
+  const Captain = require('./captain.model');
+  const captain = new Captain({
     userId,
     vehicleType: data.vehicleType,
     vehicleModel: data.vehicleModel,
     plateNumber: data.plateNumber,
     status: 'pending_review',
   });
-  return captain;
+  return captainRepo.saveDoc(captain);
 };
 
-// ---------- Upload Documents ----------
-const uploadDocuments = async (userId, files) => {
-  const captain = await Captain.findOne({ userId });
-  if (!captain) throw new Error('Captain not found');
-
-  const updates = {};
-  if (files.nationalId) updates['documents.nationalId'] = files.nationalId[0].path;
-  if (files.driverLicense) updates['documents.driverLicense'] = files.driverLicense[0].path;
-  if (files.vehicleLicense) updates['documents.vehicleLicense'] = files.vehicleLicense[0].path;
-
-  await Captain.updateOne({ _id: captain._id }, { $set: updates });
-  return { message: 'Documents uploaded successfully' };
-};
-
-// ---------- Get Captain Status ----------
 const getCaptainStatus = async (userId) => {
-  const captain = await Captain.findOne({ userId }).select('status rejectionReason');
+  const captain = await captainRepo.findByUserId(userId);
   if (!captain) return { status: 'not_registered' };
   return { status: captain.status, rejectionReason: captain.rejectionReason };
 };
 
-// ---------- Approve / Reject (Admin) ----------
-const approveCaptain = async (captainId, adminId) => {
-  const captain = await Captain.findById(captainId);
+const toggleOnline = async (userId, isOnline) => {
+  const captain = await captainRepo.findByUserId(userId);
+  if (!captain) throw new Error('Captain not found');
+  if (captain.status !== 'approved') throw new Error('Captain not approved');
+  return captainRepo.updateByUserId(userId, { isOnline });
+};
+
+const getNearbyDrivers = async (lat, lng, radiusKm = 5) => {
+  const captains = await captainRepo.findNearby(lng, lat, radiusKm);
+  return captains.map(_formatCaptainForPassenger);
+};
+
+const approveCaptain = async (captainId) => {
+  const captain = await captainRepo.findById(captainId);
   if (!captain) throw new Error('Captain not found');
   captain.status = 'approved';
   captain.rejectionReason = null;
-  await captain.save();
-  await User.findByIdAndUpdate(captain.userId, { role: 'captain' });
-
+  await captainRepo.saveDoc(captain);
+  await userRepo.updateById(captain.userId, { role: 'captain' });
   return captain;
 };
 
 const rejectCaptain = async (captainId, reason) => {
-  const captain = await Captain.findById(captainId);
+  const captain = await captainRepo.findById(captainId);
   if (!captain) throw new Error('Captain not found');
   captain.status = 'rejected';
   captain.rejectionReason = reason;
-  await captain.save();
-  return captain;
+  return captainRepo.saveDoc(captain);
 };
 
-// ---------- Toggle Online Status ----------
-const toggleOnline = async (userId, isOnline) => {
-  const captain = await Captain.findOne({ userId });
-  if (!captain) throw new Error('Captain not found');
-  if (captain.status !== 'approved') throw new Error('Captain not approved');
-  captain.isOnline = isOnline;
-  await captain.save();
-  return captain;
-};
-
-// ---------- Nearby Drivers (Geo) ----------
-const getNearbyDrivers = async (lat, lng, radius = 3) => {
-  const captains = await Captain.find({
-    status: 'approved',
-    isOnline: true,
-    location: {
-      $near: {
-        $geometry: { type: 'Point', coordinates: [lng, lat] },
-        $maxDistance: radius * 1000,
-      },
-    },
-  })
-    .populate('userId', 'name phone avatar')
-    .lean();
-
-  return captains.map(c => ({
-    captain_id: c._id.toString(),
-    name: c.userId.name,
-    phone: c.userId.phone || '',
-    avatar: c.userId.avatar,
-    vehicle_type: c.vehicleType,
-    vehicle_model: c.vehicleModel,
-    vehicle_color: c.vehicleColor || '',
-    plate_number: c.plateNumber,
-    lat: c.location?.coordinates?.[1] || 0,
-    lng: c.location?.coordinates?.[0] || 0,
-    status: c.isOnline ? 'available' : 'busy',
-    rating: c.rating || 0,
-    total_trips: c.totalTrips || 0,
-  }));
-};
 const updateLocation = async (userId, lat, lng) => {
-  const captain = await Captain.findOne({ userId });
+  const captain = await captainRepo.findByUserId(userId);
   if (!captain) throw new Error('Captain not found');
-  captain.location = { type: 'Point', coordinates: [lng, lat] };
-  captain.lastLocationAt = new Date();
-  await captain.save();
+  return captainRepo.updateByUserId(userId, {
+    location: { type: 'Point', coordinates: [lng, lat] },
+    lastLocationAt: new Date(),
+  });
 };
-// أضف هذه الدالة
+
+const updatePersonal = async (userId, data) => {
+  const captain = await captainRepo.findByUserId(userId);
+  if (!captain) throw new Error('Captain not found');
+  const { nationalId, address, governorate, dateOfBirth } = data;
+  if (nationalId !== undefined) captain.documents.nationalId = nationalId;
+  if (address !== undefined) captain.documents.address = address;
+  if (governorate !== undefined) captain.documents.governorate = governorate;
+  if (dateOfBirth !== undefined) captain.documents.dateOfBirth = dateOfBirth;
+  return captainRepo.saveDoc(captain);
+};
+
+const updateVehicle = async (userId, data) => {
+  const captain = await captainRepo.findByUserId(userId);
+  if (!captain) throw new Error('Captain not found');
+  const { vehicleType, vehicleModel, plateNumber, vehicleColor } = data;
+  if (vehicleType) captain.vehicleType = vehicleType;
+  if (vehicleModel) captain.vehicleModel = vehicleModel;
+  if (plateNumber) captain.plateNumber = plateNumber;
+  if (vehicleColor) captain.vehicleColor = vehicleColor;
+  return captainRepo.saveDoc(captain);
+};
+
 const updateSingleDocument = async (userId, type, fileUrl) => {
-  const captain = await Captain.findOne({ userId });
-  if (!captain) throw new Error('الكابتن غير موجود');
-
-  // تحديث الحقل المحدد في documents
+  const captain = await captainRepo.findByUserId(userId);
+  if (!captain) throw new Error('Captain not found');
   captain.documents[type] = fileUrl;
-  await captain.save();
-  return captain;
-};
-const updateCaptainPersonal = async (userId, personalData) => {
-  let captain = await Captain.findOne({ userId });
-  if (!captain) throw new Error('لم يتم إنشاء حساب كابتن بعد');
-  Object.assign(captain, personalData);
-  await captain.save();
-  return captain;
+  return captainRepo.saveDoc(captain);
 };
 
-const updateCaptainVehicle = async (userId, vehicleData) => {
-  let captain = await Captain.findOne({ userId });
-  if (!captain) throw new Error('لم يتم إنشاء حساب كابتن بعد');
-  Object.assign(captain, vehicleData);
-  await captain.save();
-  return captain;
-};
+// -------------------- helpers --------------------
+function _formatCaptainForPassenger(c) {
+  return {
+    captainId: c._id.toString(),
+    name: c.userId?.name,
+    phone: c.userId?.phone || '',
+    avatar: c.userId?.avatar,
+    vehicleType: c.vehicleType,
+    vehicleModel: c.vehicleModel,
+    vehicleColor: c.vehicleColor || '',
+    plateNumber: c.plateNumber,
+    lat: c.location?.coordinates?.[1] ?? 0,
+    lng: c.location?.coordinates?.[0] ?? 0,
+    heading: c.heading ?? 0,
+    rating: c.rating ?? 0,
+    totalTrips: c.totalTrips ?? 0,
+  };
+}
+
 module.exports = {
   registerCaptain,
-  uploadDocuments,
   getCaptainStatus,
+  toggleOnline,
+  getNearbyDrivers,
   approveCaptain,
   rejectCaptain,
-  getNearbyDrivers,
-  toggleOnline,
-  updateSingleDocument,
   updateLocation,
-  updateCaptainPersonal,
-  updateCaptainVehicle
+  updatePersonal,
+  updateVehicle,
+  updateSingleDocument,
 };

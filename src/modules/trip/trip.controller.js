@@ -1,81 +1,65 @@
 const tripService = require('./trip.service');
 const { sendSuccess, sendError } = require('../../utils/response.util');
 
-const createTrip = async (req, res, next) => {
-  try {
-    const passengerId = req.user.id;
-    const { captainId, startLocation } = req.body;
-    const trip = await tripService.createTrip(passengerId, captainId, startLocation);
-    sendSuccess(res, trip, 'تم إنشاء الرحلة بنجاح', 201);
-  } catch (error) {
-    next(error);
-  }
+// Thin wrapper — all business logic lives in trip.service
+const wrap = (fn) => async (req, res, next) => {
+  try { await fn(req, res, next); } catch (err) { next(err); }
 };
 
-const confirmStart = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user.id;
-    const role = req.user.role;
-    const trip = await tripService.confirmStart(id, userId, role);
-    sendSuccess(res, trip, 'تم تأكيد بدء الرحلة');
-  } catch (error) {
-    next(error);
-  }
-};
+const createTrip = wrap(async (req, res) => {
+  const trip = await tripService.createTrip(req.user.id, req.body.captainId, req.body.startLocation);
+  sendSuccess(res, trip, 'Trip created', 201);
+});
 
-const requestEnd = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user.id;
-    const role = req.user.role;
-    const trip = await tripService.requestEndTrip(id, userId, role);
-    sendSuccess(res, trip, 'تم إرسال طلب إنهاء الرحلة');
-  } catch (error) {
-    next(error);
-  }
-};
+const acceptTrip = wrap(async (req, res) => {
+  const trip = await tripService.acceptTrip(req.params.id, req.user.id);
+  sendSuccess(res, trip, 'Trip accepted');
+});
 
-const confirmEnd = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { distanceKm } = req.body;
-    const userId = req.user.id;
-    const role = req.user.role;
-    const trip = await tripService.confirmEndTrip(id, userId, role, distanceKm);
-    sendSuccess(res, trip, 'تم إنهاء الرحلة بنجاح');
-  } catch (error) {
-    next(error);
-  }
-};
+const markOnTheWay = wrap(async (req, res) => {
+  const trip = await tripService.markOnTheWay(req.params.id, req.user.id);
+  sendSuccess(res, trip);
+});
 
-const cancelTrip = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { reason } = req.body;
-    const userId = req.user.id;
-    const trip = await tripService.cancelTrip(id, userId, reason);
-    sendSuccess(res, trip, 'تم إلغاء الرحلة');
-  } catch (error) {
-    next(error);
-  }
-};
+const markArrived = wrap(async (req, res) => {
+  const trip = await tripService.markArrived(req.params.id, req.user.id);
+  sendSuccess(res, trip);
+});
 
-const getTrip = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const trip = await tripService.getTrip(id);
-    sendSuccess(res, trip);
-  } catch (error) {
-    next(error);
-  }
-};
+const startTrip = wrap(async (req, res) => {
+  const trip = await tripService.startTrip(req.params.id, req.user.id);
+  sendSuccess(res, trip);
+});
+
+const endTrip = wrap(async (req, res) => {
+  const trip = await tripService.endTrip(req.params.id, req.user.id, req.body.distanceKm);
+  sendSuccess(res, trip);
+});
+
+const cancelTrip = wrap(async (req, res) => {
+  const trip = await tripService.cancelTrip(req.params.id, req.user.id, req.user.role, req.body.reason);
+  sendSuccess(res, trip, 'Trip cancelled');
+});
+
+const getCurrentTrip = wrap(async (req, res) => {
+  const trip = await tripService.getCurrentTrip(req.user.id, req.user.role);
+  sendSuccess(res, trip);
+});
+
+const getTrip = wrap(async (req, res) => {
+  const trip = await tripService.getTrip(req.params.id);
+  if (!trip) return sendError(res, 'Trip not found', 404);
+  sendSuccess(res, trip);
+});
 
 module.exports = {
   createTrip,
-  confirmStart,
-  requestEnd,
-  confirmEnd,
+  acceptTrip,
+  markOnTheWay,
+  markArrived,
+  startTrip,
+  endTrip,
   cancelTrip,
+  getCurrentTrip,
   getTrip,
 };
