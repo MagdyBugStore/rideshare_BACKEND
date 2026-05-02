@@ -5,7 +5,6 @@ const requireRole = (...allowedRoles) => {
     if (!req.user) {
       return sendError(res, 'Unauthorized', 401);
     }
-    console.log("req user " , req.user)
     if (!allowedRoles.includes(req.user.role)) {
 
       return sendError(res, 'Forbidden: insufficient permissions', 403);

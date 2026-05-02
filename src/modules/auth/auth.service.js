@@ -6,6 +6,8 @@ const env = require('../../config/env');
 const logger = require('../../config/logger');
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_LOCKOUT_MINUTES = 30;
 
 // ─────────────────────────────────────────────────────────────
 // Google OAuth
@@ -57,8 +59,17 @@ const sendOtp = async (phone) => {
 // OTP — Step 2: Verify + Login
 // ─────────────────────────────────────────────────────────────
 const verifyOtpAndLogin = async (phone, code, name) => {
-  const user = await userRepo.findOne({ phone }, '+otpCode +otpExpiresAt');
+  const user = await userRepo.findOne(
+    { phone },
+    '+otpCode +otpExpiresAt +otpAttempts +otpLockedUntil',
+  );
   if (!user || !user.otpCode) throw new Error('OTP not found — request a new one');
+
+  // Enforce lockout before anything else
+  if (user.otpLockedUntil && user.otpLockedUntil > new Date()) {
+    const remainingMin = Math.ceil((user.otpLockedUntil.getTime() - Date.now()) / 60000);
+    throw new Error(`LOCKED:${remainingMin}`);
+  }
 
   if (user.otpExpiresAt < new Date()) {
     user.otpCode = undefined;
@@ -67,10 +78,24 @@ const verifyOtpAndLogin = async (phone, code, name) => {
     throw new Error('OTP expired');
   }
 
-  if (!verifyOtp(code, user.otpCode)) throw new Error('Invalid OTP');
+  if (!verifyOtp(code, user.otpCode)) {
+    user.otpAttempts = (user.otpAttempts || 0) + 1;
+    if (user.otpAttempts >= OTP_MAX_ATTEMPTS) {
+      user.otpLockedUntil = new Date(Date.now() + OTP_LOCKOUT_MINUTES * 60 * 1000);
+      user.otpAttempts = 0;
+      await authRepo.saveDoc(user);
+      throw new Error(`LOCKED:${OTP_LOCKOUT_MINUTES}`);
+    }
+    const remaining = OTP_MAX_ATTEMPTS - user.otpAttempts;
+    await authRepo.saveDoc(user);
+    throw new Error(`Invalid OTP — ${remaining} ${remaining === 1 ? 'محاولة' : 'محاولات'} متبقية`);
+  }
 
+  // Success — clear OTP data and reset lockout state
   user.otpCode = undefined;
   user.otpExpiresAt = undefined;
+  user.otpAttempts = 0;
+  user.otpLockedUntil = undefined;
 
   if (name && (user.name === user.phone || !user.name)) {
     user.name = name;

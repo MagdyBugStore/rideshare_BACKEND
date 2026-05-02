@@ -79,7 +79,7 @@ const updateLocation = wrap(async (req, res) => {
 // ── Documents ─────────────────────────────────────────────────────────
 const uploadSingleDoc = wrap(async (req, res) => {
   const { type } = req.params;
-  const allowed = ['nationalId', 'driverLicense', 'vehicleLicense'];
+  const allowed = ['nationalId', 'driverLicense', 'vehicleLicense', 'vehicleProxy'];
   if (!allowed.includes(type)) return sendError(res, 'Invalid document type', 400);
   if (!req.file) return sendError(res, 'No file uploaded', 400);
 

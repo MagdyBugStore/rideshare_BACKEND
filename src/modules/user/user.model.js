@@ -14,8 +14,10 @@ const userSchema = new mongoose.Schema(
     avatar: { type: String }, // URL
     isActive: { type: Boolean, default: true },
     // For OTP temporary storage
-    otpCode: { type: String },
-    otpExpiresAt: { type: Date },
+    otpCode: { type: String, select: false },
+    otpExpiresAt: { type: Date, select: false },
+    otpAttempts: { type: Number, default: 0, select: false },
+    otpLockedUntil: { type: Date, select: false },
     // Array supports multiple devices (max 5, FIFO)
     refreshTokens: [{ type: String }],
   },

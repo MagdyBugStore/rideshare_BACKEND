@@ -729,7 +729,6 @@
 5     if (!req.user) {
 6       return sendError(res, 'Unauthorized', 401);
 7     }
-8     console.log("req user " , req.user)
 9     if (!allowedRoles.includes(req.user.role)) {
 10 
 11       return sendError(res, 'Forbidden: insufficient permissions', 403);

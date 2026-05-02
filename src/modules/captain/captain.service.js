@@ -24,8 +24,8 @@ const getCaptainStatus = async (userId) => {
 
 const toggleOnline = async (userId, isOnline) => {
   const captain = await captainRepo.findByUserId(userId);
-  if (!captain) throw new Error('Captain not found');
-  if (captain.status !== 'approved') throw new Error('Captain not approved');
+  if (!captain) { const e = new Error('Captain not found'); e.status = 404; throw e; }
+  if (captain.status !== 'approved') { const e = new Error('Captain not approved'); e.status = 403; throw e; }
   return captainRepo.updateByUserId(userId, { isOnline });
 };
 

@@ -5,6 +5,22 @@ const logger = require('../config/logger');
 
 let io;
 
+// In-memory presence map: userId → Set<socketId>
+// Replace with Redis adapter for horizontal scaling
+const _presence = new Map();
+
+const _addPresence = (userId, socketId) => {
+  if (!_presence.has(userId)) _presence.set(userId, new Set());
+  _presence.get(userId).add(socketId);
+};
+
+const _removePresence = (userId, socketId) => {
+  const sockets = _presence.get(userId);
+  if (!sockets) return;
+  sockets.delete(socketId);
+  if (sockets.size === 0) _presence.delete(userId);
+};
+
 const initSocket = (server) => {
   io = new Server(server, {
     cors: {
@@ -34,6 +50,9 @@ const initSocket = (server) => {
     const { userId, role } = socket.data;
     logger.info(`[Socket] connected ${socket.id} | user=${userId} | role=${role}`);
 
+    // Track presence
+    _addPresence(userId, socket.id);
+
     // Personal room — enables targeted messages to any user
     socket.join(`user:${userId}`);
 
@@ -45,6 +64,7 @@ const initSocket = (server) => {
     require('../modules/trip/trip.socket').register(io, socket);
 
     socket.on('disconnect', (reason) => {
+      _removePresence(userId, socket.id);
       logger.info(`[Socket] disconnected ${socket.id} | user=${userId} | reason=${reason}`);
     });
   });
@@ -75,4 +95,10 @@ const emitToPassengers = (event, data) => {
   io.to('passengers').emit(event, data);
 };
 
-module.exports = { initSocket, getIo, emitToUser, emitToTrip, emitToPassengers };
+// Check if a user has at least one active socket connection
+const isUserOnline = (userId) => _presence.has(userId.toString());
+
+// Get all currently online userIds
+const getOnlineUserIds = () => Array.from(_presence.keys());
+
+module.exports = { initSocket, getIo, emitToUser, emitToTrip, emitToPassengers, isUserOnline, getOnlineUserIds };

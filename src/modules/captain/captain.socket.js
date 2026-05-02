@@ -3,7 +3,9 @@ const logger = require('../../config/logger');
 const { emitToPassengers } = require('../../socket');
 
 const LOCATION_THROTTLE_MS = 3000;
+const DISCONNECT_GRACE_MS = 10000; // 10s grace period before marking offline
 const _lastDbWrite = new Map();
+const _disconnectTimers = new Map(); // userId → timeout handle
 
 const register = (io, socket) => {
   if (socket.data.role !== 'captain') return;
@@ -75,8 +77,21 @@ const register = (io, socket) => {
       .catch((err) => logger.error('[Captain Socket] location DB write error', err));
   });
 
-  // ── Auto-offline on disconnect ───────────────────────────────────
-  socket.on('disconnect', () => _setOffline(userId, socket));
+  // ── Auto-offline on disconnect (with 10s grace period for reconnects) ──
+  socket.on('disconnect', () => {
+    const timer = setTimeout(() => {
+      _disconnectTimers.delete(userId);
+      _setOffline(userId, socket);
+    }, DISCONNECT_GRACE_MS);
+    _disconnectTimers.set(userId, timer);
+  });
+
+  // Cancel pending offline timer if captain reconnects
+  if (_disconnectTimers.has(userId)) {
+    clearTimeout(_disconnectTimers.get(userId));
+    _disconnectTimers.delete(userId);
+    logger.info(`[Captain Socket] ${userId} reconnected — cancelled offline timer`);
+  }
 };
 
 // ── Private ──────────────────────────────────────────────────────────
