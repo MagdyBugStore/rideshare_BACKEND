@@ -18,11 +18,15 @@ router.post('/estimate', authMiddleware, requireRole('passenger'), validate(esti
 router.post('/search', authMiddleware, requireRole('passenger'), validate(searchTripSchema), controller.searchTrip);
 router.post('/', authMiddleware, requireRole('passenger'), validate(createTripSchema), controller.createTrip);
 
+// ── Passenger only (rating) ───────────────────────────────────────────
+router.post('/:id/rate-captain', authMiddleware, requireRole('passenger'), controller.rateCaptain);
+
 // ── Captain only ──────────────────────────────────────────────────────
-router.post('/:id/accept',     authMiddleware, requireRole('captain'), controller.acceptTrip);
-router.post('/:id/on-the-way', authMiddleware, requireRole('captain'), controller.markOnTheWay);
-router.post('/:id/arrived',    authMiddleware, requireRole('captain'), controller.markArrived);
-router.post('/:id/start',      authMiddleware, requireRole('captain'), controller.startTrip);
-router.post('/:id/end',        authMiddleware, requireRole('captain'), validate(endTripSchema), controller.endTrip);
+router.post('/:id/accept',        authMiddleware, requireRole('captain'), controller.acceptTrip);
+router.post('/:id/on-the-way',    authMiddleware, requireRole('captain'), controller.markOnTheWay);
+router.post('/:id/arrived',       authMiddleware, requireRole('captain'), controller.markArrived);
+router.post('/:id/start',         authMiddleware, requireRole('captain'), controller.startTrip);
+router.post('/:id/end',           authMiddleware, requireRole('captain'), validate(endTripSchema), controller.endTrip);
+router.post('/:id/rate-passenger',authMiddleware, requireRole('captain'), controller.ratePassenger);
 
 module.exports = router;

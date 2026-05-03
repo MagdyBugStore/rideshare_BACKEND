@@ -52,6 +52,12 @@ async function _dispatchLoop(trip, captains, passenger) {
       carType:   trip.carType,
     });
 
+    notificationService.notify(captainUserId, {
+      title: 'طلب رحلة جديد 🚖',
+      body: `راكب بالقرب منك يطلب رحلة`,
+      data: { type: 'trip:request', tripId: trip._id.toString() },
+    }).catch(() => {});
+
     const result = await _awaitCaptainResponse(captainUserId).catch(() => null);
     if (!result?.accepted) continue;
 
@@ -107,6 +113,12 @@ async function _dispatchLoop(trip, captains, passenger) {
       carType:   trip.carType,
     });
 
+    notificationService.notify(captainUserId, {
+      title: 'طلب رحلة جديد 🚖',
+      body: `راكب بالقرب منك يطلب رحلة`,
+      data: { type: 'trip:request', tripId: trip._id.toString() },
+    }).catch(() => {});
+
     const result = await _awaitCaptainResponse(captainUserId).catch(() => null);
     if (!result?.accepted) continue;
 
@@ -128,6 +140,12 @@ async function _dispatchLoop(trip, captains, passenger) {
         rating:       captain.rating ?? 0,
       },
     });
+
+    notificationService.notify(passenger._id.toString(), {
+      title: 'تم قبول رحلتك ✓',
+      body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
+      data: { type: 'trip:accepted', tripId: trip._id.toString() },
+    }).catch(() => {});
 
     logger.info(`[Trip Dispatch] ${trip._id} accepted (expanded radius) by ${captainUserId}`);
     return;
@@ -195,6 +213,12 @@ const createTrip = async (passengerId, captainId, startLocation, carType = 'car'
     startLocation,
   });
 
+  notificationService.notify(captain.userId.toString(), {
+    title: 'طلب رحلة جديد 🚖',
+    body: `راكب بالقرب منك يطلب رحلة`,
+    data: { type: 'trip:request', tripId: trip._id.toString() },
+  }).catch(() => {});
+
   logger.info(`[Trip] created ${trip._id} | passenger=${passengerId} | captain=${captainId}`);
   return trip;
 };
@@ -228,6 +252,12 @@ const acceptTrip = async (tripId, captainUserId) => {
     },
   });
 
+  notificationService.notify(trip.passengerId, {
+    title: 'تم قبول رحلتك ✓',
+    body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
+    data: { type: 'trip:accepted', tripId: trip._id.toString() },
+  }).catch(() => {});
+
   logger.info(`[Trip] ${tripId} accepted by ${captainUserId}`);
   return tripRepo.findByIdPopulated(tripId);
 };
@@ -248,12 +278,19 @@ const _captainTransition = async (tripId, captainUserId, newStatus) => {
 
   emitToTrip(tripId, 'trip:status:update', { tripId, status: newStatus });
 
-  // Push passenger when captain arrives
   if (newStatus === 'arrived') {
     notificationService.notify(trip.passengerId, {
       title: 'الكابتن وصل 🚗',
       body: 'الكابتن في موقعك، توجه إليه',
       data: { type: 'captain:arrived', tripId },
+    }).catch(() => {});
+  }
+
+  if (newStatus === 'started') {
+    notificationService.notify(trip.passengerId, {
+      title: 'انطلقت رحلتك 🚀',
+      body: 'الكابتن بدأ الرحلة — استمتع بالرحلة',
+      data: { type: 'trip:started', tripId },
     }).catch(() => {});
   }
 
@@ -285,6 +322,19 @@ const endTrip = async (tripId, captainUserId, distanceKm) => {
   await captainRepo.updateByUserId(captainUserId, { isOnTrip: false, $inc: { totalTrips: 1 } });
 
   emitToTrip(tripId, 'trip:status:update', { tripId, status: 'ended', fare });
+
+  notificationService.notify(trip.passengerId, {
+    title: 'وصلت! 🎉',
+    body: `المبلغ الإجمالي: ${fare.total} ريال`,
+    data: { type: 'trip:ended', tripId, fare: String(fare.total) },
+  }).catch(() => {});
+
+  notificationService.notify(captainUserId, {
+    title: 'انتهت الرحلة ✓',
+    body: `المبلغ: ${fare.total} ريال — ${distanceKm.toFixed(1)} كم`,
+    data: { type: 'trip:ended', tripId, fare: String(fare.total) },
+  }).catch(() => {});
+
   logger.info(`[Trip] ${tripId} ended | km=${distanceKm} | fare=${fare.total}`);
   return trip;
 };
@@ -327,6 +377,55 @@ const cancelTrip = async (tripId, userId, role, reason) => {
   return trip;
 };
 
+// ── Rating ────────────────────────────────────────────────────────────
+
+const rateCaptain = async (tripId, passengerId, { rating, tags = [] }) => {
+  const trip = await tripRepo.findById(tripId);
+  if (!trip) throw Object.assign(new Error('Trip not found'), { status: 404 });
+  if (trip.passengerId.toString() !== passengerId.toString())
+    throw Object.assign(new Error('Unauthorized'), { status: 403 });
+  if (trip.status !== 'ended')
+    throw Object.assign(new Error('Trip not ended'), { status: 400 });
+  if (trip.passengerRating)
+    throw Object.assign(new Error('Already rated'), { status: 409 });
+
+  trip.passengerRating = rating;
+  trip.passengerRatingTags = tags;
+  await tripRepo.saveDoc(trip);
+
+  // Update captain's rolling average rating
+  const captain = await captainRepo.findById(trip.captainId);
+  if (captain) {
+    const newCount = captain.totalTrips || 1;
+    const oldRating = captain.rating || 0;
+    const newRating = ((oldRating * (newCount - 1)) + rating) / newCount;
+    await captainRepo.updateById(trip.captainId, { rating: Math.min(5, newRating) });
+  }
+
+  logger.info(`[Rating] trip=${tripId} captain rated ${rating} by passenger`);
+  return trip;
+};
+
+const ratePassenger = async (tripId, captainUserId, { rating, tags = [] }) => {
+  const trip = await tripRepo.findById(tripId);
+  if (!trip) throw Object.assign(new Error('Trip not found'), { status: 404 });
+
+  const captain = await captainRepo.findByUserId(captainUserId);
+  if (!captain || trip.captainId.toString() !== captain._id.toString())
+    throw Object.assign(new Error('Unauthorized'), { status: 403 });
+  if (trip.status !== 'ended')
+    throw Object.assign(new Error('Trip not ended'), { status: 400 });
+  if (trip.captainRating)
+    throw Object.assign(new Error('Already rated'), { status: 409 });
+
+  trip.captainRating = rating;
+  trip.captainRatingTags = tags;
+  await tripRepo.saveDoc(trip);
+
+  logger.info(`[Rating] trip=${tripId} passenger rated ${rating} by captain`);
+  return trip;
+};
+
 // ── GET /trips/current ────────────────────────────────────────────────
 const getCurrentTrip = async (userId, role) => {
   if (role === 'passenger') {
@@ -360,6 +459,8 @@ module.exports = {
   startTrip,
   endTrip,
   cancelTrip,
+  rateCaptain,
+  ratePassenger,
   getCurrentTrip,
   getTrip,
 };

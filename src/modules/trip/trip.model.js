@@ -45,6 +45,12 @@ const tripSchema = new mongoose.Schema(
     cancellationReason: String,
     cancelledBy: { type: String, enum: ['passenger', 'captain'] },
 
+    // Ratings
+    passengerRating: { type: Number, min: 1, max: 5 },
+    passengerRatingTags: [String],
+    captainRating: { type: Number, min: 1, max: 5 },
+    captainRatingTags: [String],
+
     // State-change timestamps (one per transition)
     acceptedAt:  Date,
     onTheWayAt:  Date,

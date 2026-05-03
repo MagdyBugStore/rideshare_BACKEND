@@ -69,6 +69,16 @@ const estimateFare = wrap(async (req, res) => {
   sendSuccess(res, result);
 });
 
+const rateCaptain = wrap(async (req, res) => {
+  const trip = await tripService.rateCaptain(req.params.id, req.user.id, req.body);
+  sendSuccess(res, trip, 'Rating submitted');
+});
+
+const ratePassenger = wrap(async (req, res) => {
+  const trip = await tripService.ratePassenger(req.params.id, req.user.id, req.body);
+  sendSuccess(res, trip, 'Rating submitted');
+});
+
 module.exports = {
   searchTrip,
   createTrip,
@@ -78,6 +88,8 @@ module.exports = {
   startTrip,
   endTrip,
   cancelTrip,
+  rateCaptain,
+  ratePassenger,
   getCurrentTrip,
   getTrip,
   estimateFare,

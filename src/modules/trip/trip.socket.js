@@ -35,6 +35,19 @@ const register = (io, socket) => {
     tripService.captainRejected(userId);
     logger.info(`[Trip Socket] ${userId} rejected dispatch`);
   });
+
+  // In-trip chat relay — broadcast to all members of the trip room
+  socket.on('chat:message', ({ tripId, text }) => {
+    if (!tripId || !text?.trim()) return;
+    const payload = {
+      senderId: userId,
+      role: socket.data.role,
+      text: text.trim(),
+      sentAt: new Date().toISOString(),
+    };
+    io.to(`trip:${tripId}`).emit('chat:message', payload);
+    logger.info(`[Chat] trip=${tripId} from=${userId} text="${text.trim().slice(0, 40)}"`);
+  });
 };
 
 module.exports = { register };
