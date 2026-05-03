@@ -7,8 +7,8 @@ const findByUserId = (userId) => Captain.findOne({ userId });
 const findByUserIdPopulated = (userId) =>
   Captain.findOne({ userId }).populate('userId', 'name avatar');
 
-const findNearby = (lng, lat, radiusKm = 5) =>
-  Captain.find({
+const findNearby = (lng, lat, radiusKm = 5, carType = null) => {
+  const filter = {
     status: 'approved',
     isOnline: true,
     isOnTrip: false,
@@ -18,9 +18,10 @@ const findNearby = (lng, lat, radiusKm = 5) =>
         $maxDistance: radiusKm * 1000,
       },
     },
-  })
-    .populate('userId', 'name avatar phone')
-    .lean();
+  };
+  if (carType) filter.vehicleType = carType;
+  return Captain.find(filter).populate('userId', 'name avatar phone').lean();
+};
 
 const updateById = (id, update) =>
   Captain.findByIdAndUpdate(id, update, { new: true });

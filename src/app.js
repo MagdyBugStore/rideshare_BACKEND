@@ -11,8 +11,9 @@ const tripRoutes      = require('./modules/trip/trip.routes');
 const reviewRoutes    = require('./modules/review/review.routes');
 const adminRoutes     = require('./modules/admin/admin.routes');
 const passengerRoutes = require('./modules/passenger/passenger.routes');
-const fareRoutes      = require('./modules/fare/fare.routes');
-const seedRoutes      = require('./modules/seed/seed.routes');
+const fareRoutes         = require('./modules/fare/fare.routes');
+const notificationRoutes = require('./modules/notification/notification.routes');
+const seedRoutes         = require('./modules/seed/seed.routes');
 
 const app = express();
 
@@ -32,8 +33,9 @@ app.use('/api/trips',     tripRoutes);
 app.use('/api/reviews',   reviewRoutes);
 app.use('/api/admin',     adminRoutes);
 app.use('/api/passenger', passengerRoutes);
-app.use('/api/fares',     fareRoutes);
-app.use('/api/seed',      seedRoutes);
+app.use('/api/fares',         fareRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/seed',          seedRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'OK', timestamp: new Date().toISOString() }));
 

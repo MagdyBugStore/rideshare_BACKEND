@@ -20,6 +20,8 @@ const userSchema = new mongoose.Schema(
     otpLockedUntil: { type: Date, select: false },
     // Array supports multiple devices (max 5, FIFO)
     refreshTokens: [{ type: String }],
+    // FCM device tokens (max 5, FIFO)
+    fcmTokens: [{ type: String }],
   },
   { timestamps: true }
 );

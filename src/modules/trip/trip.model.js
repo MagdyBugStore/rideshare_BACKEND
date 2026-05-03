@@ -16,7 +16,8 @@ const TRANSITIONS = {
 const tripSchema = new mongoose.Schema(
   {
     passengerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    captainId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Captain', required: true },
+    captainId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Captain', default: null },
+    carType:     { type: String, enum: ['car', 'motorcycle', 'tukutuk', 'altTukutuk'], required: true },
     status: {
       type: String,
       enum: VALID_STATUSES,

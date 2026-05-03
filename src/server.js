@@ -2,6 +2,7 @@ const app = require('./app');
 const connectDB = require('./config/db');
 const env = require('./config/env');
 const { initSocket } = require('./socket');
+const { initFirebase } = require('./config/firebase');
 const os = require('os'); 
 
 const getLocalExternalIP = () => {
@@ -18,6 +19,7 @@ const getLocalExternalIP = () => {
 };
 
 const startServer = async () => {
+    initFirebase();
     await connectDB();
   const server = app.listen(env.PORT, '0.0.0.0', () => { // '0.0.0.0' بتسمح للجهاز يستقبل اتصالات من بره الـ localhost
         const ip = getLocalExternalIP();

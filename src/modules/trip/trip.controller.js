@@ -6,8 +6,15 @@ const wrap = (fn) => async (req, res, next) => {
   try { await fn(req, res, next); } catch (err) { next(err); }
 };
 
+// Dispatch-based trip creation — finds nearest captains automatically
+const searchTrip = wrap(async (req, res) => {
+  const trip = await tripService.searchTrip(req.user.id, req.body.startLocation, req.body.carType);
+  sendSuccess(res, { tripId: trip._id, status: trip.status }, 'Searching for captain', 202);
+});
+
+// Direct trip creation — passenger manually selects captain from map
 const createTrip = wrap(async (req, res) => {
-  const trip = await tripService.createTrip(req.user.id, req.body.captainId, req.body.startLocation);
+  const trip = await tripService.createTrip(req.user.id, req.body.captainId, req.body.startLocation, req.body.carType);
   sendSuccess(res, trip, 'Trip created', 201);
 });
 
@@ -52,7 +59,18 @@ const getTrip = wrap(async (req, res) => {
   sendSuccess(res, trip);
 });
 
+const estimateFare = wrap(async (req, res) => {
+  const { startLocation, endLocation, carType } = req.body;
+  const result = tripService.estimateFare(
+    startLocation.lat, startLocation.lng,
+    endLocation.lat,   endLocation.lng,
+    carType,
+  );
+  sendSuccess(res, result);
+});
+
 module.exports = {
+  searchTrip,
   createTrip,
   acceptTrip,
   markOnTheWay,
@@ -62,4 +80,5 @@ module.exports = {
   cancelTrip,
   getCurrentTrip,
   getTrip,
+  estimateFare,
 };

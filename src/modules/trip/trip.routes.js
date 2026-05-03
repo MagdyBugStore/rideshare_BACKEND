@@ -4,7 +4,7 @@ const controller = require('./trip.controller');
 const authMiddleware = require('../../middlewares/auth.middleware');
 const { requireRole } = require('../../middlewares/role.middleware');
 const { validate } = require('../../middlewares/validate');
-const { createTripSchema, endTripSchema, cancelTripSchema } = require('./trip.validation');
+const { searchTripSchema, createTripSchema, endTripSchema, cancelTripSchema, estimateFareSchema } = require('./trip.validation');
 
 // ── Any authenticated user ────────────────────────────────────────────
 // Must be before /:id routes to avoid param capture
@@ -14,6 +14,8 @@ router.get('/:id',        authMiddleware, controller.getTrip);
 router.post('/:id/cancel', authMiddleware, validate(cancelTripSchema), controller.cancelTrip);
 
 // ── Passenger only ────────────────────────────────────────────────────
+router.post('/estimate', authMiddleware, requireRole('passenger'), validate(estimateFareSchema), controller.estimateFare);
+router.post('/search', authMiddleware, requireRole('passenger'), validate(searchTripSchema), controller.searchTrip);
 router.post('/', authMiddleware, requireRole('passenger'), validate(createTripSchema), controller.createTrip);
 
 // ── Captain only ──────────────────────────────────────────────────────

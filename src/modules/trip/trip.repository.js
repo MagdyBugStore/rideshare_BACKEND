@@ -17,4 +17,12 @@ const create = (data) => Trip.create(data);
 
 const saveDoc = (doc) => doc.save();
 
-module.exports = { findById, findByIdPopulated, findOne, findOnePopulated, create, saveDoc };
+// Atomic claim: only succeeds if trip is still in 'searching' status (prevents race conditions)
+const atomicAccept = (tripId, captainId) =>
+  Trip.findOneAndUpdate(
+    { _id: tripId, status: 'searching' },
+    { $set: { captainId, status: 'accepted', acceptedAt: new Date() } },
+    { new: true },
+  );
+
+module.exports = { findById, findByIdPopulated, findOne, findOnePopulated, create, saveDoc, atomicAccept };
