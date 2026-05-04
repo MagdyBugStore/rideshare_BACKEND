@@ -27,12 +27,12 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 // ── Routes ────────────────────────────────────────────────────────────
-app.use('/api/auth',      authRoutes);
-app.use('/api/captain',   captainRoutes);
-app.use('/api/trips',     tripRoutes);
-app.use('/api/reviews',   reviewRoutes);
-app.use('/api/admin',     adminRoutes);
-app.use('/api/passenger', passengerRoutes);
+app.use('/api/auth',          authRoutes);
+app.use('/api/captain',       captainRoutes);
+app.use('/api/trips',         tripRoutes);
+app.use('/api/reviews',       reviewRoutes);
+app.use('/api/admin',         adminRoutes);
+app.use('/api/passenger',     passengerRoutes);
 app.use('/api/fares',         fareRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/seed',          seedRoutes);

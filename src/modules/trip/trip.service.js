@@ -19,15 +19,13 @@ const _pending = new Map();
 
 // ── Passenger: initiate trip search (dispatch loop) ──────────────────
 const searchTrip = async (passengerId, startLocation, carType) => {
-  const captains = await captainRepo.findNearby(startLocation.lng, startLocation.lat, 5, carType);
-  if (captains.length === 0) {
-    throw Object.assign(new Error('NO_CAPTAINS_NEARBY'), { status: 404 });
-  }
-
   const passenger = await userRepo.findById(passengerId);
   const trip = await tripRepo.create({ passengerId, carType, startLocation, status: 'searching' });
 
-  // Fire and forget — dispatch runs asynchronously, passenger waits for socket events
+  const captains = await captainRepo.findNearby(startLocation.lng, startLocation.lat, 5, carType);
+
+  // Fire-and-forget — dispatch handles empty list by trying expanded radius then emitting
+  // trip:no_captain_found if nothing works. Passenger always gets the 202 + searching screen.
   _dispatchLoop(trip, captains, passenger).catch((err) =>
     logger.error('[Trip Dispatch] unhandled error', err)
   );
