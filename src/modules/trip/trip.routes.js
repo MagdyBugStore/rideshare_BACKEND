@@ -7,11 +7,13 @@ const { validate } = require('../../middlewares/validate');
 const { searchTripSchema, createTripSchema, endTripSchema, cancelTripSchema, estimateFareSchema } = require('./trip.validation');
 
 // ── Any authenticated user ────────────────────────────────────────────
-// Must be before /:id routes to avoid param capture
-router.get('/current', authMiddleware, controller.getCurrentTrip);
+// Literal-path routes MUST come before /:id routes to prevent Express
+// matching e.g. "cancel" or "current" as an :id parameter value.
+router.get('/current',  authMiddleware, controller.getCurrentTrip);
+router.post('/cancel',  authMiddleware, validate(cancelTripSchema), controller.cancelCurrentTrip);
 
-router.get('/:id',        authMiddleware, controller.getTrip);
-router.post('/:id/cancel', authMiddleware, validate(cancelTripSchema), controller.cancelTrip);
+router.get('/:id',          authMiddleware, controller.getTrip);
+router.post('/:id/cancel',  authMiddleware, validate(cancelTripSchema), controller.cancelTrip);
 
 // ── Passenger only ────────────────────────────────────────────────────
 router.post('/estimate', authMiddleware, requireRole('passenger'), validate(estimateFareSchema), controller.estimateFare);

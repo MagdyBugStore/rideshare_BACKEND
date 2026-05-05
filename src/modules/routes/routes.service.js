@@ -28,25 +28,36 @@ const getPolyline = async (originLat, originLng, destLat, destLng) => {
   if (hit) return hit;
 
   const params = new URLSearchParams({
-    origin:      `${originLat},${originLng}`,
+    origin: `${originLat},${originLng}`,
     destination: `${destLat},${destLng}`,
     key,
     language: 'ar',
+    alternatives: 'false',
+    departure_time: 'now',
+    traffic_model: 'best_guess',
   });
 
   const data = await httpsGet(
     `https://maps.googleapis.com/maps/api/directions/json?${params}`
   );
 
-  if (data.status !== 'OK') throw new Error(`Google Directions: ${data.status}`);
+  if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+    throw new Error(`Google Directions: ${data.status}`);
+  }
 
   const route = data.routes?.[0];
-  const leg   = route?.legs?.[0];
+  const leg = route?.legs?.[0];
+  const normalDurationMins = leg ? Math.ceil(leg.duration.value / 60) : 0;
+
+  const trafficDurationMins = leg?.duration_in_traffic
+    ? Math.ceil(leg.duration_in_traffic.value / 60)
+    : normalDurationMins;
 
   const result = {
     encodedPolyline: route?.overview_polyline?.points ?? '',
-    distanceKm:      leg ? Math.round((leg.distance.value / 1000) * 100) / 100 : 0,
-    durationMins:    leg ? Math.ceil(leg.duration.value / 60) : 0,
+    distanceKm: leg ? Math.round((leg.distance.value / 1000) * 100) / 100 : 0,
+    durationMins: normalDurationMins,
+    durationInTrafficMins: trafficDurationMins, // ✅ الوقت الفعلي مع الزحمة
   };
 
   polylineCache.set(cacheKey, result);

@@ -44,17 +44,17 @@ async function _dispatchLoop(trip, captains, passenger) {
     if (!captainUserId) continue;
 
     emitToUser(captainUserId, 'trip:request:incoming', {
-      tripId:    trip._id.toString(),
+      tripId: trip._id.toString(),
       passenger: { id: passenger._id.toString(), name: passenger.name, avatar: passenger.avatar },
       startLocation: trip.startLocation,
-      carType:   trip.carType,
+      carType: trip.carType,
     });
 
     notificationService.notify(captainUserId, {
       title: 'طلب رحلة جديد 🚖',
       body: `راكب بالقرب منك يطلب رحلة`,
       data: { type: 'trip:request', tripId: trip._id.toString() },
-    }).catch(() => {});
+    }).catch(() => { });
 
     const result = await _awaitCaptainResponse(captainUserId).catch(() => null);
     if (!result?.accepted) continue;
@@ -69,15 +69,15 @@ async function _dispatchLoop(trip, captains, passenger) {
     emitToUser(passenger._id.toString(), 'trip:accepted', {
       tripId: trip._id.toString(),
       captain: {
-        captainId:    captain._id.toString(),
-        name:         captain.userId?.name,
-        avatar:       captain.userId?.avatar,
-        phone:        captain.userId?.phone,
-        vehicleType:  captain.vehicleType,
+        captainId: captain._id.toString(),
+        name: captain.userId?.name,
+        avatar: captain.userId?.avatar,
+        phone: captain.userId?.phone,
+        vehicleType: captain.vehicleType,
         vehicleModel: captain.vehicleModel,
         vehicleColor: captain.vehicleColor,
-        plateNumber:  captain.plateNumber,
-        rating:       captain.rating ?? 0,
+        plateNumber: captain.plateNumber,
+        rating: captain.rating ?? 0,
       },
     });
 
@@ -85,7 +85,7 @@ async function _dispatchLoop(trip, captains, passenger) {
       title: 'تم قبول رحلتك ✓',
       body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
       data: { type: 'trip:accepted', tripId: trip._id.toString() },
-    }).catch(() => {});
+    }).catch(() => { });
 
     logger.info(`[Trip Dispatch] ${trip._id} accepted by captain ${captainUserId}`);
     return;
@@ -106,17 +106,17 @@ async function _dispatchLoop(trip, captains, passenger) {
     if (!captainUserId) continue;
 
     emitToUser(captainUserId, 'trip:request:incoming', {
-      tripId:    trip._id.toString(),
+      tripId: trip._id.toString(),
       passenger: { id: passenger._id.toString(), name: passenger.name, avatar: passenger.avatar },
       startLocation: trip.startLocation,
-      carType:   trip.carType,
+      carType: trip.carType,
     });
 
     notificationService.notify(captainUserId, {
       title: 'طلب رحلة جديد 🚖',
       body: `راكب بالقرب منك يطلب رحلة`,
       data: { type: 'trip:request', tripId: trip._id.toString() },
-    }).catch(() => {});
+    }).catch(() => { });
 
     const result = await _awaitCaptainResponse(captainUserId).catch(() => null);
     if (!result?.accepted) continue;
@@ -127,17 +127,17 @@ async function _dispatchLoop(trip, captains, passenger) {
     await captainRepo.updateByUserId(captainUserId, { isOnTrip: true });
 
     emitToUser(passenger._id.toString(), 'trip:accepted', {
-      tripId:  trip._id.toString(),
+      tripId: trip._id.toString(),
       captain: {
-        captainId:    captain._id.toString(),
-        name:         captain.userId?.name,
-        avatar:       captain.userId?.avatar,
-        phone:        captain.userId?.phone,
-        vehicleType:  captain.vehicleType,
+        captainId: captain._id.toString(),
+        name: captain.userId?.name,
+        avatar: captain.userId?.avatar,
+        phone: captain.userId?.phone,
+        vehicleType: captain.vehicleType,
         vehicleModel: captain.vehicleModel,
         vehicleColor: captain.vehicleColor,
-        plateNumber:  captain.plateNumber,
-        rating:       captain.rating ?? 0,
+        plateNumber: captain.plateNumber,
+        rating: captain.rating ?? 0,
       },
     });
 
@@ -145,7 +145,7 @@ async function _dispatchLoop(trip, captains, passenger) {
       title: 'تم قبول رحلتك ✓',
       body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
       data: { type: 'trip:accepted', tripId: trip._id.toString() },
-    }).catch(() => {});
+    }).catch(() => { });
 
     logger.info(`[Trip Dispatch] ${trip._id} accepted (expanded radius) by ${captainUserId}`);
     return;
@@ -208,7 +208,7 @@ const createTrip = async (passengerId, captainId, startLocation, carType = 'car'
 
   // Notify captain — they are identified by their User._id on the socket
   emitToUser(captain.userId.toString(), 'trip:request:incoming', {
-    tripId:    trip._id.toString(),
+    tripId: trip._id.toString(),
     passenger: { id: passengerId.toString(), name: passenger?.name, avatar: passenger?.avatar },
     startLocation,
   });
@@ -217,7 +217,7 @@ const createTrip = async (passengerId, captainId, startLocation, carType = 'car'
     title: 'طلب رحلة جديد 🚖',
     body: `راكب بالقرب منك يطلب رحلة`,
     data: { type: 'trip:request', tripId: trip._id.toString() },
-  }).catch(() => {});
+  }).catch(() => { });
 
   logger.info(`[Trip] created ${trip._id} | passenger=${passengerId} | captain=${captainId}`);
   return trip;
@@ -241,15 +241,15 @@ const acceptTrip = async (tripId, captainUserId) => {
   emitToUser(trip.passengerId.toString(), 'trip:accepted', {
     tripId: trip._id.toString(),
     captain: {
-      captainId:    captain._id.toString(),
-      name:         captain.userId?.name,
-      avatar:       captain.userId?.avatar,
-      phone:        captain.userId?.phone,
-      vehicleType:  captain.vehicleType,
+      captainId: captain._id.toString(),
+      name: captain.userId?.name,
+      avatar: captain.userId?.avatar,
+      phone: captain.userId?.phone,
+      vehicleType: captain.vehicleType,
       vehicleModel: captain.vehicleModel,
       vehicleColor: captain.vehicleColor,
-      plateNumber:  captain.plateNumber,
-      rating:       captain.rating,
+      plateNumber: captain.plateNumber,
+      rating: captain.rating,
     },
   });
 
@@ -257,7 +257,7 @@ const acceptTrip = async (tripId, captainUserId) => {
     title: 'تم قبول رحلتك ✓',
     body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
     data: { type: 'trip:accepted', tripId: trip._id.toString() },
-  }).catch(() => {});
+  }).catch(() => { });
 
   logger.info(`[Trip] ${tripId} accepted by ${captainUserId}`);
   return tripRepo.findByIdPopulated(tripId);
@@ -284,7 +284,7 @@ const _captainTransition = async (tripId, captainUserId, newStatus) => {
       title: 'الكابتن وصل 🚗',
       body: 'الكابتن في موقعك، توجه إليه',
       data: { type: 'captain:arrived', tripId },
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   if (newStatus === 'started') {
@@ -292,7 +292,7 @@ const _captainTransition = async (tripId, captainUserId, newStatus) => {
       title: 'انطلقت رحلتك 🚀',
       body: 'الكابتن بدأ الرحلة — استمتع بالرحلة',
       data: { type: 'trip:started', tripId },
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   logger.info(`[Trip] ${tripId} → ${newStatus}`);
@@ -300,8 +300,8 @@ const _captainTransition = async (tripId, captainUserId, newStatus) => {
 };
 
 const markOnTheWay = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'onTheWay');
-const markArrived  = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'arrived');
-const startTrip    = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'started');
+const markArrived = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'arrived');
+const startTrip = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'started');
 
 // ── Captain: end trip ─────────────────────────────────────────────────
 const endTrip = async (tripId, captainUserId, distanceKm) => {
@@ -328,22 +328,50 @@ const endTrip = async (tripId, captainUserId, distanceKm) => {
     title: 'وصلت! 🎉',
     body: `المبلغ الإجمالي: ${fare.total} ريال`,
     data: { type: 'trip:ended', tripId, fare: String(fare.total) },
-  }).catch(() => {});
+  }).catch(() => { });
 
   notificationService.notify(captainUserId, {
     title: 'انتهت الرحلة ✓',
     body: `المبلغ: ${fare.total} ريال — ${distanceKm.toFixed(1)} كم`,
     data: { type: 'trip:ended', tripId, fare: String(fare.total) },
-  }).catch(() => {});
+  }).catch(() => { });
 
   logger.info(`[Trip] ${tripId} ended | km=${distanceKm} | fare=${fare.total}`);
   return trip;
+};
+
+// ── Either party: cancel active trip (no tripId needed) ──────────────
+// Used by POST /trips/cancel — resolves the caller's current active trip
+// then delegates to the normal cancelTrip flow.
+// أضف هذه الوظيفة أو عدّل الموجودة
+// داخل src/modules/trip/trip.service.js
+
+const cancelCurrentTrip = async (userId, role, reason) => {
+  let trip;
+  if (role === 'passenger') {
+    trip = await tripRepo.findOne({ passengerId: userId, status: { $in: ACTIVE_STATUSES } });
+  } else if (role === 'captain') {
+    const captain = await captainRepo.findByUserId(userId);
+    if (!captain) throw Object.assign(new Error('Captain profile not found'), { status: 404 });
+    trip = await tripRepo.findOne({ captainId: captain._id, status: { $in: ACTIVE_STATUSES } });
+  }
+  // ✅ عدّل هذا الجزء - لا ترمي خطأ، بل ارجع نجاحاً
+  if (!trip) {
+    return { message: 'No active trip found, assuming already cancelled', alreadyCancelled: true };
+  }
+  return cancelTrip(trip._id.toString(), userId, role, reason);
 };
 
 // ── Either party: cancel ──────────────────────────────────────────────
 const cancelTrip = async (tripId, userId, role, reason) => {
   const trip = await tripRepo.findById(tripId);
   if (!trip) throw new Error('Trip not found');
+
+  // ✅ أضف هذا الشرط أولاً - إذا كانت الرحلة ملغاة بالفعل
+  if (trip.status === 'cancelled') {
+    return { message: 'Trip already cancelled', alreadyCancelled: true };
+  }
+
   if (!trip.canTransitionTo('cancelled')) throw new Error('Cannot cancel trip in current state');
 
   if (role === 'passenger') {
@@ -371,7 +399,7 @@ const cancelTrip = async (tripId, userId, role, reason) => {
       title: 'تم إلغاء الرحلة',
       body: role === 'passenger' ? 'قام الراكب بإلغاء الرحلة' : 'قام الكابتن بإلغاء الرحلة',
       data: { type: 'trip:cancelled', tripId },
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   logger.info(`[Trip] ${tripId} cancelled by ${role}`);
@@ -460,6 +488,7 @@ module.exports = {
   startTrip,
   endTrip,
   cancelTrip,
+  cancelCurrentTrip,
   rateCaptain,
   ratePassenger,
   getCurrentTrip,

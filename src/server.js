@@ -3,13 +3,13 @@ const connectDB = require('./config/db');
 const env = require('./config/env');
 const { initSocket } = require('./socket');
 const { initFirebase } = require('./config/firebase');
-const os = require('os'); 
+const os = require('os');
+const { initializeDefaultFares } = require('./modules/fare/fare.controller');
 
 const getLocalExternalIP = () => {
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
         for (const iface of interfaces[name]) {
-            // بنبحث عن IPv4 ويكون مش internal (عشان نتخطى 127.0.0.1)
             if (iface.family === 'IPv4' && !iface.internal) {
                 return iface.address;
             }
@@ -21,7 +21,7 @@ const getLocalExternalIP = () => {
 const startServer = async () => {
     initFirebase();
     await connectDB();
-  const server = app.listen(env.PORT, '0.0.0.0', () => { // '0.0.0.0' بتسمح للجهاز يستقبل اتصالات من بره الـ localhost
+    const server = app.listen(env.PORT, '0.0.0.0', () => {
         const ip = getLocalExternalIP();
         console.log(`🚀 Server running on:`);
         console.log(`   🏠 Local:   http://localhost:${env.PORT}`);

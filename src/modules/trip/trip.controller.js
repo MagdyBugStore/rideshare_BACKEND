@@ -48,6 +48,13 @@ const cancelTrip = wrap(async (req, res) => {
   sendSuccess(res, trip, 'Trip cancelled');
 });
 
+// Cancels the caller's current active trip without requiring a tripId in the URL.
+// Handles the case where the client sends POST /trips/cancel (no :id segment).
+const cancelCurrentTrip = wrap(async (req, res) => {
+  const trip = await tripService.cancelCurrentTrip(req.user.id, req.user.role, req.body.reason);
+  sendSuccess(res, trip, 'Trip cancelled');
+});
+
 const getCurrentTrip = wrap(async (req, res) => {
   const trip = await tripService.getCurrentTrip(req.user.id, req.user.role);
   sendSuccess(res, trip);
@@ -88,6 +95,7 @@ module.exports = {
   startTrip,
   endTrip,
   cancelTrip,
+  cancelCurrentTrip,
   rateCaptain,
   ratePassenger,
   getCurrentTrip,

@@ -5,7 +5,7 @@ const { sendSuccess, sendError } = require('../../utils/response.util');
 
 const MOCK_CAPTAINS_COUNT = 15;
 const MOCK_TRIPS_COUNT = 5;
-const MOCK_DOMAIN = 'wasalni.dev'; // لتمييز البيانات التجريبية
+const MOCK_DOMAIN = 'meshwari.dev'; // لتمييز البيانات التجريبية
 
 const runSeeder = async (req, res, next) => {
   if (process.env.NODE_ENV !== 'development') {

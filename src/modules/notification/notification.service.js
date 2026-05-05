@@ -57,7 +57,7 @@ const notify = async (userId, { title, body, data = {} }) => {
     ),
     android: {
       priority: 'high',
-      notification: { sound: 'default', channelId: 'wasalni_trips' },
+      notification: { sound: 'default', channelId: 'meshwari_trips' },
     },
     apns: {
       payload: { aps: { sound: 'default', badge: 1 } },

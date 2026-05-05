@@ -6,11 +6,11 @@ const Captain = require('../modules/captain/captain.model');
 const seedTestCaptain = async () => {
   try {
     // تأكد من وجود مستخدم اختباري
-    let testUser = await User.findOne({ email: 'test@wasalni.com' });
+    let testUser = await User.findOne({ email: 'test@meshwari.com' });
     if (!testUser) {
       testUser = await User.create({
         name: 'كابتن تجريبي',
-        email: 'test@wasalni.com',
+        email: 'test@meshwari.com',
         role: 'captain',
         googleId: 'test-google-id-' + Date.now(),
       });
