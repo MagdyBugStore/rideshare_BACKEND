@@ -32,7 +32,7 @@
 1 {
 2   "name": "meshwari-backend",
 3   "version": "1.0.0",
-4   "description": "وصّلني - backend with Node.js, Express, MongoDB",
+4   "description": "تاكس بدر - backend with Node.js, Express, MongoDB",
 5   "keywords": [],
 6   "license": "ISC",
 7   "author": "",
@@ -485,13 +485,13 @@
 3 const env = require('./config/env');
 4 const { initSocket } = require('./socket');
 5 const { initFirebase } = require('./config/firebase');
-6 const os = require('os'); 
-7 
-8 const getLocalExternalIP = () => {
-9     const interfaces = os.networkInterfaces();
-10     for (const name of Object.keys(interfaces)) {
-11         for (const iface of interfaces[name]) {
-12             // بنبحث عن IPv4 ويكون مش internal (عشان نتخطى 127.0.0.1)
+6 const os = require('os');
+7 const { initializeDefaultFares } = require('./modules/fare/fare.controller');
+8 
+9 const getLocalExternalIP = () => {
+10     const interfaces = os.networkInterfaces();
+11     for (const name of Object.keys(interfaces)) {
+12         for (const iface of interfaces[name]) {
 13             if (iface.family === 'IPv4' && !iface.internal) {
 14                 return iface.address;
 15             }
@@ -503,7 +503,7 @@
 21 const startServer = async () => {
 22     initFirebase();
 23     await connectDB();
-24   const server = app.listen(env.PORT, '0.0.0.0', () => { // '0.0.0.0' بتسمح للجهاز يستقبل اتصالات من بره الـ localhost
+24     const server = app.listen(env.PORT, '0.0.0.0', () => {
 25         const ip = getLocalExternalIP();
 26         console.log(`🚀 Server running on:`);
 27         console.log(`   🏠 Local:   http://localhost:${env.PORT}`);
@@ -2334,62 +2334,386 @@
 
 ```javascript
 1 // src/modules/fare/fare.controller.js
-2 const { sendSuccess } = require('../../utils/response.util');
-3 
-4 // تعريفات الأسعار الافتراضية (يمكن تخزينها في قاعدة البيانات لاحقًا)
-5 const DEFAULT_FARES = {
-6   car: {
-7     baseFare: 10,
-8     perKmFare: 7,
-9     currency: 'ج.م',
-10     description: 'سيارة'
-11   },
-12   motorcycle: {
-13     baseFare: 8,
-14     perKmFare: 5,
-15     currency: 'ج.م',
-16     description: 'دراجة نارية'
-17   },
-18   tukutuk: {
-19     baseFare: 7,
-20     perKmFare: 4,
-21     currency: 'ج.م',
-22     description: 'توك توك'
-23   },
-24   alt_tukutuk: {
-25     baseFare: 6,
-26     perKmFare: 4,
-27     currency: 'ج.م',
-28     description: 'بديل توك توك'
-29   }
-30 };
-31 
-32 const getFares = async (req, res, next) => {
-33   try {
-34     // في المستقبل يمكن جلب الأسعار من قاعدة البيانات
-35     sendSuccess(res, DEFAULT_FARES, 'Fares retrieved successfully');
-36   } catch (error) {
-37     next(error);
-38   }
-39 };
-40 
-41 module.exports = {
-42   getFares
-43 };
+2 
+3 const Fare = require('./fare.model');
+4 const { sendSuccess, sendError } = require('../../utils/response.util');
+5 
+6 // Get all active fares
+7 const getFares = async (req, res, next) => {
+8   try {
+9     const { includeInactive = false, showInAppOnly = true } = req.query;
+10     
+11     let filter = {};
+12     
+13     // Filter by isActive
+14     if (includeInactive !== 'true') {
+15       filter.isActive = true;
+16     }
+17     
+18     // Filter by showInApp (for frontend display)
+19     if (showInAppOnly === 'true') {
+20       filter.showInApp = true;
+21     }
+22     
+23     const fares = await Fare.find(filter)
+24       .sort({ displayOrder: 1, vehicleType: 1 });
+25     
+26     // Transform to object format expected by frontend
+27     const faresMap = {};
+28     fares.forEach(fare => {
+29       faresMap[fare.vehicleType] = {
+30         baseFare: fare.baseFare,
+31         perKmFare: fare.perKmFare,
+32         firstKmFare: fare.firstKmFare,
+33         extraKmFare: fare.extraKmFare,
+34         currency: fare.currency,
+35         description: fare.description,
+36         commissionPercentage: fare.commissionPercentage,
+37         minFare: fare.minFare,
+38         waitingChargePerMinute: fare.waitingChargePerMinute,
+39         isActive: fare.isActive,
+40         showInApp: fare.showInApp,
+41         displayOrder: fare.displayOrder,
+42       };
+43     });
+44     
+45     sendSuccess(res, faresMap, 'Fares retrieved successfully');
+46   } catch (error) {
+47     next(error);
+48   }
+49 };
+50 
+51 // Get single fare by vehicle type
+52 const getFareByType = async (req, res, next) => {
+53   try {
+54     const { vehicleType } = req.params;
+55     const fare = await Fare.findOne({ vehicleType });
+56     
+57     if (!fare) {
+58       return sendError(res, 'Fare configuration not found', 404);
+59     }
+60     
+61     sendSuccess(res, fare, 'Fare retrieved successfully');
+62   } catch (error) {
+63     next(error);
+64   }
+65 };
+66 
+67 // Create or update fare (Admin only)
+68 const upsertFare = async (req, res, next) => {
+69   try {
+70     const { vehicleType } = req.params;
+71     const updateData = req.body;
+72     
+73     const fare = await Fare.findOneAndUpdate(
+74       { vehicleType },
+75       { 
+76         ...updateData, 
+77         vehicleType,
+78         // Ensure isActive is handled properly
+79         isActive: updateData.isActive !== undefined ? updateData.isActive : true,
+80       },
+81       { new: true, upsert: true, runValidators: true }
+82     );
+83     
+84     sendSuccess(res, fare, 'Fare saved successfully');
+85   } catch (error) {
+86     next(error);
+87   }
+88 };
+89 
+90 // Toggle fare active status (Admin only)
+91 const toggleFareStatus = async (req, res, next) => {
+92   try {
+93     const { vehicleType } = req.params;
+94     const { isActive } = req.body;
+95     
+96     if (isActive === undefined) {
+97       return sendError(res, 'isActive field is required', 400);
+98     }
+99     
+100     const fare = await Fare.findOneAndUpdate(
+101       { vehicleType },
+102       { isActive },
+103       { new: true }
+104     );
+105     
+106     if (!fare) {
+107       return sendError(res, 'Fare configuration not found', 404);
+108     }
+109     
+110     sendSuccess(res, fare, `Fare ${isActive ? 'activated' : 'deactivated'} successfully`);
+111   } catch (error) {
+112     next(error);
+113   }
+114 };
+115 
+116 // Toggle showInApp status (Admin only)
+117 const toggleShowInApp = async (req, res, next) => {
+118   try {
+119     const { vehicleType } = req.params;
+120     const { showInApp } = req.body;
+121     
+122     if (showInApp === undefined) {
+123       return sendError(res, 'showInApp field is required', 400);
+124     }
+125     
+126     const fare = await Fare.findOneAndUpdate(
+127       { vehicleType },
+128       { showInApp },
+129       { new: true }
+130     );
+131     
+132     if (!fare) {
+133       return sendError(res, 'Fare configuration not found', 404);
+134     }
+135     
+136     sendSuccess(res, fare, `Fare ${showInApp ? 'shown' : 'hidden'} in app successfully`);
+137   } catch (error) {
+138     next(error);
+139   }
+140 };
+141 
+142 // Update display order (Admin only)
+143 const updateDisplayOrder = async (req, res, next) => {
+144   try {
+145     const { orders } = req.body; // Array of { vehicleType, displayOrder }
+146     
+147     if (!Array.isArray(orders)) {
+148       return sendError(res, 'orders array is required', 400);
+149     }
+150     
+151     const bulkOps = orders.map(order => ({
+152       updateOne: {
+153         filter: { vehicleType: order.vehicleType },
+154         update: { displayOrder: order.displayOrder },
+155       },
+156     }));
+157     
+158     await Fare.bulkWrite(bulkOps);
+159     
+160     sendSuccess(res, null, 'Display order updated successfully');
+161   } catch (error) {
+162     next(error);
+163   }
+164 };
+165 
+166 // Delete fare (Admin only)
+167 const deleteFare = async (req, res, next) => {
+168   try {
+169     const { vehicleType } = req.params;
+170     const fare = await Fare.findOneAndDelete({ vehicleType });
+171     
+172     if (!fare) {
+173       return sendError(res, 'Fare configuration not found', 404);
+174     }
+175     
+176     sendSuccess(res, null, 'Fare deleted successfully');
+177   } catch (error) {
+178     next(error);
+179   }
+180 };
+181 
+182 // Calculate fare dynamically
+183 const calculateFare = async (req, res, next) => {
+184   try {
+185     const { distanceKm, vehicleType, waitingMinutes = 0 } = req.body;
+186     
+187     if (!distanceKm || distanceKm <= 0) {
+188       return sendError(res, 'Distance is required', 400);
+189     }
+190     
+191     const fareConfig = await Fare.findOne({ vehicleType, isActive: true });
+192     
+193     if (!fareConfig) {
+194       return sendError(res, 'Fare configuration not found for this vehicle type', 404);
+195     }
+196     
+197     // Calculate fare using the stored configuration
+198     let totalFare = 0;
+199     
+200     if (distanceKm <= 1) {
+201       totalFare = fareConfig.firstKmFare;
+202     } else {
+203       totalFare = fareConfig.firstKmFare + ((distanceKm - 1) * fareConfig.extraKmFare);
+204     }
+205     
+206     // Add waiting charges if any
+207     if (waitingMinutes > 0 && fareConfig.waitingChargePerMinute > 0) {
+208       totalFare += waitingMinutes * fareConfig.waitingChargePerMinute;
+209     }
+210     
+211     // Apply minimum fare if applicable
+212     if (fareConfig.minFare > 0 && totalFare < fareConfig.minFare) {
+213       totalFare = fareConfig.minFare;
+214     }
+215     
+216     const commission = Math.round(totalFare * (fareConfig.commissionPercentage / 100));
+217     const netEarnings = totalFare - commission;
+218     
+219     const result = {
+220       distanceKm: Math.round(distanceKm * 100) / 100,
+221       vehicleType,
+222       fareBreakdown: {
+223         firstKm: Math.min(distanceKm, 1),
+224         firstFare: fareConfig.firstKmFare,
+225         extraKm: Math.max(0, distanceKm - 1),
+226         extraFare: distanceKm > 1 ? (distanceKm - 1) * fareConfig.extraKmFare : 0,
+227         waitingMinutes,
+228         waitingCharge: waitingMinutes * fareConfig.waitingChargePerMinute,
+229         total: Math.round(totalFare),
+230         commission,
+231         netEarnings,
+232         commissionPercentage: fareConfig.commissionPercentage,
+233       },
+234       currency: fareConfig.currency,
+235     };
+236     
+237     sendSuccess(res, result, 'Fare calculated successfully');
+238   } catch (error) {
+239     next(error);
+240   }
+241 };
+242 
+243 // Bulk create/update fares from admin panel
+244 const bulkUpdateFares = async (req, res, next) => {
+245   try {
+246     const { fares } = req.body;
+247     
+248     if (!Array.isArray(fares)) {
+249       return sendError(res, 'fares array is required', 400);
+250     }
+251     
+252     const results = [];
+253     for (const fareData of fares) {
+254       const fare = await Fare.findOneAndUpdate(
+255         { vehicleType: fareData.vehicleType },
+256         fareData,
+257         { new: true, upsert: true, runValidators: true }
+258       );
+259       results.push(fare);
+260     }
+261     
+262     sendSuccess(res, results, `${results.length} fares updated successfully`);
+263   } catch (error) {
+264     next(error);
+265   }
+266 };
+267 
+268 module.exports = {
+269   getFares,
+270   getFareByType,
+271   upsertFare,
+272   toggleFareStatus,
+273   toggleShowInApp,
+274   updateDisplayOrder,
+275   deleteFare,
+276   calculateFare,
+277   bulkUpdateFares,
+278 };
+```
+
+## File: `src\modules\fare\fare.model.js`
+
+```javascript
+1 // src/modules/fare/fare.model.js
+2 
+3 const mongoose = require('mongoose');
+4 
+5 const fareSchema = new mongoose.Schema(
+6   {
+7     vehicleType: {
+8       type: String,
+9       enum: ['car', 'motorcycle', 'tukutuk', 'alt_tukutuk', 'comfort', 'van'],
+10       required: true,
+11       unique: true,
+12     },
+13     baseFare: {
+14       type: Number,
+15       required: true,
+16       min: 0,
+17     },
+18     perKmFare: {
+19       type: Number,
+20       required: true,
+21       min: 0,
+22     },
+23     firstKmFare: {
+24       type: Number,
+25       required: true,
+26       min: 0,
+27     },
+28     extraKmFare: {
+29       type: Number,
+30       required: true,
+31       min: 0,
+32     },
+33     commissionPercentage: {
+34       type: Number,
+35       default: 20,
+36       min: 0,
+37       max: 100,
+38     },
+39     currency: {
+40       type: String,
+41       default: 'ج.م',
+42     },
+43     description: {
+44       type: String,
+45       default: '',
+46     },
+47     isActive: {
+48       type: Boolean,
+49       default: true,
+50       index: true, 
+51     },
+52     minFare: {
+53       type: Number,
+54       default: 0,
+55     },
+56     waitingChargePerMinute: {
+57       type: Number,
+58       default: 0,
+59     },
+60     showInApp: {
+61       type: Boolean,
+62       default: true,
+63     },
+64     displayOrder: {
+65       type: Number,
+66       default: 0,
+67     },
+68   },
+69   { timestamps: true }
+70 );
+71 
+72 // ✅ إنشاء compound index للبحث السريع
+73 fareSchema.index({ isActive: 1, displayOrder: 1 });
+74 
+75 module.exports = mongoose.model('Fare', fareSchema);
 ```
 
 ## File: `src\modules\fare\fare.routes.js`
 
 ```javascript
 1 // src/modules/fare/fare.routes.js
-2 const express = require('express');
-3 const router = express.Router();
-4 const controller = require('./fare.controller');
-5 
-6 // لا يحتاج مصادقة لأنه بيانات عامة
-7 router.get('/', controller.getFares);
+2 
+3 const express = require('express');
+4 const router = express.Router();
+5 const controller = require('./fare.controller');
+6 const authMiddleware = require('../../middlewares/auth.middleware');
+7 const { requireRole } = require('../../middlewares/role.middleware');
 8 
-9 module.exports = router;
+9 // Public routes (no auth needed for getting fares)
+10 router.get('/', controller.getFares);
+11 router.get('/:vehicleType', controller.getFareByType);
+12 router.post('/calculate', controller.calculateFare);
+13 
+14 // Admin only routes
+15 router.post('/:vehicleType', authMiddleware, requireRole('admin'), controller.upsertFare);
+16 router.delete('/:vehicleType', authMiddleware, requireRole('admin'), controller.deleteFare);
+17 
+18 module.exports = router;
 ```
 
 ## File: `src\modules\notification\notification.controller.js`
@@ -3106,32 +3430,43 @@
 28   if (hit) return hit;
 29 
 30   const params = new URLSearchParams({
-31     origin:      `${originLat},${originLng}`,
+31     origin: `${originLat},${originLng}`,
 32     destination: `${destLat},${destLng}`,
 33     key,
 34     language: 'ar',
-35   });
-36 
-37   const data = await httpsGet(
-38     `https://maps.googleapis.com/maps/api/directions/json?${params}`
-39   );
-40 
-41   if (data.status !== 'OK') throw new Error(`Google Directions: ${data.status}`);
-42 
-43   const route = data.routes?.[0];
-44   const leg   = route?.legs?.[0];
-45 
-46   const result = {
-47     encodedPolyline: route?.overview_polyline?.points ?? '',
-48     distanceKm:      leg ? Math.round((leg.distance.value / 1000) * 100) / 100 : 0,
-49     durationMins:    leg ? Math.ceil(leg.duration.value / 60) : 0,
-50   };
+35     alternatives: 'false',
+36     departure_time: 'now',
+37     traffic_model: 'best_guess',
+38   });
+39 
+40   const data = await httpsGet(
+41     `https://maps.googleapis.com/maps/api/directions/json?${params}`
+42   );
+43 
+44   if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+45     throw new Error(`Google Directions: ${data.status}`);
+46   }
+47 
+48   const route = data.routes?.[0];
+49   const leg = route?.legs?.[0];
+50   const normalDurationMins = leg ? Math.ceil(leg.duration.value / 60) : 0;
 51 
-52   polylineCache.set(cacheKey, result);
-53   return result;
-54 };
+52   const trafficDurationMins = leg?.duration_in_traffic
+53     ? Math.ceil(leg.duration_in_traffic.value / 60)
+54     : normalDurationMins;
 55 
-56 module.exports = { getPolyline };
+56   const result = {
+57     encodedPolyline: route?.overview_polyline?.points ?? '',
+58     distanceKm: leg ? Math.round((leg.distance.value / 1000) * 100) / 100 : 0,
+59     durationMins: normalDurationMins,
+60     durationInTrafficMins: trafficDurationMins, // ✅ الوقت الفعلي مع الزحمة
+61   };
+62 
+63   polylineCache.set(cacheKey, result);
+64   return result;
+65 };
+66 
+67 module.exports = { getPolyline };
 ```
 
 ## File: `src\modules\seed\seed.controller.js`
@@ -3606,17 +3941,17 @@
 44     if (!captainUserId) continue;
 45 
 46     emitToUser(captainUserId, 'trip:request:incoming', {
-47       tripId:    trip._id.toString(),
+47       tripId: trip._id.toString(),
 48       passenger: { id: passenger._id.toString(), name: passenger.name, avatar: passenger.avatar },
 49       startLocation: trip.startLocation,
-50       carType:   trip.carType,
+50       carType: trip.carType,
 51     });
 52 
 53     notificationService.notify(captainUserId, {
 54       title: 'طلب رحلة جديد 🚖',
 55       body: `راكب بالقرب منك يطلب رحلة`,
 56       data: { type: 'trip:request', tripId: trip._id.toString() },
-57     }).catch(() => {});
+57     }).catch(() => { });
 58 
 59     const result = await _awaitCaptainResponse(captainUserId).catch(() => null);
 60     if (!result?.accepted) continue;
@@ -3631,15 +3966,15 @@
 69     emitToUser(passenger._id.toString(), 'trip:accepted', {
 70       tripId: trip._id.toString(),
 71       captain: {
-72         captainId:    captain._id.toString(),
-73         name:         captain.userId?.name,
-74         avatar:       captain.userId?.avatar,
-75         phone:        captain.userId?.phone,
-76         vehicleType:  captain.vehicleType,
+72         captainId: captain._id.toString(),
+73         name: captain.userId?.name,
+74         avatar: captain.userId?.avatar,
+75         phone: captain.userId?.phone,
+76         vehicleType: captain.vehicleType,
 77         vehicleModel: captain.vehicleModel,
 78         vehicleColor: captain.vehicleColor,
-79         plateNumber:  captain.plateNumber,
-80         rating:       captain.rating ?? 0,
+79         plateNumber: captain.plateNumber,
+80         rating: captain.rating ?? 0,
 81       },
 82     });
 83 
@@ -3647,7 +3982,7 @@
 85       title: 'تم قبول رحلتك ✓',
 86       body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
 87       data: { type: 'trip:accepted', tripId: trip._id.toString() },
-88     }).catch(() => {});
+88     }).catch(() => { });
 89 
 90     logger.info(`[Trip Dispatch] ${trip._id} accepted by captain ${captainUserId}`);
 91     return;
@@ -3668,17 +4003,17 @@
 106     if (!captainUserId) continue;
 107 
 108     emitToUser(captainUserId, 'trip:request:incoming', {
-109       tripId:    trip._id.toString(),
+109       tripId: trip._id.toString(),
 110       passenger: { id: passenger._id.toString(), name: passenger.name, avatar: passenger.avatar },
 111       startLocation: trip.startLocation,
-112       carType:   trip.carType,
+112       carType: trip.carType,
 113     });
 114 
 115     notificationService.notify(captainUserId, {
 116       title: 'طلب رحلة جديد 🚖',
 117       body: `راكب بالقرب منك يطلب رحلة`,
 118       data: { type: 'trip:request', tripId: trip._id.toString() },
-119     }).catch(() => {});
+119     }).catch(() => { });
 120 
 121     const result = await _awaitCaptainResponse(captainUserId).catch(() => null);
 122     if (!result?.accepted) continue;
@@ -3689,17 +4024,17 @@
 127     await captainRepo.updateByUserId(captainUserId, { isOnTrip: true });
 128 
 129     emitToUser(passenger._id.toString(), 'trip:accepted', {
-130       tripId:  trip._id.toString(),
+130       tripId: trip._id.toString(),
 131       captain: {
-132         captainId:    captain._id.toString(),
-133         name:         captain.userId?.name,
-134         avatar:       captain.userId?.avatar,
-135         phone:        captain.userId?.phone,
-136         vehicleType:  captain.vehicleType,
+132         captainId: captain._id.toString(),
+133         name: captain.userId?.name,
+134         avatar: captain.userId?.avatar,
+135         phone: captain.userId?.phone,
+136         vehicleType: captain.vehicleType,
 137         vehicleModel: captain.vehicleModel,
 138         vehicleColor: captain.vehicleColor,
-139         plateNumber:  captain.plateNumber,
-140         rating:       captain.rating ?? 0,
+139         plateNumber: captain.plateNumber,
+140         rating: captain.rating ?? 0,
 141       },
 142     });
 143 
@@ -3707,7 +4042,7 @@
 145       title: 'تم قبول رحلتك ✓',
 146       body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
 147       data: { type: 'trip:accepted', tripId: trip._id.toString() },
-148     }).catch(() => {});
+148     }).catch(() => { });
 149 
 150     logger.info(`[Trip Dispatch] ${trip._id} accepted (expanded radius) by ${captainUserId}`);
 151     return;
@@ -3770,7 +4105,7 @@
 208 
 209   // Notify captain — they are identified by their User._id on the socket
 210   emitToUser(captain.userId.toString(), 'trip:request:incoming', {
-211     tripId:    trip._id.toString(),
+211     tripId: trip._id.toString(),
 212     passenger: { id: passengerId.toString(), name: passenger?.name, avatar: passenger?.avatar },
 213     startLocation,
 214   });
@@ -3779,7 +4114,7 @@
 217     title: 'طلب رحلة جديد 🚖',
 218     body: `راكب بالقرب منك يطلب رحلة`,
 219     data: { type: 'trip:request', tripId: trip._id.toString() },
-220   }).catch(() => {});
+220   }).catch(() => { });
 221 
 222   logger.info(`[Trip] created ${trip._id} | passenger=${passengerId} | captain=${captainId}`);
 223   return trip;
@@ -3803,15 +4138,15 @@
 241   emitToUser(trip.passengerId.toString(), 'trip:accepted', {
 242     tripId: trip._id.toString(),
 243     captain: {
-244       captainId:    captain._id.toString(),
-245       name:         captain.userId?.name,
-246       avatar:       captain.userId?.avatar,
-247       phone:        captain.userId?.phone,
-248       vehicleType:  captain.vehicleType,
+244       captainId: captain._id.toString(),
+245       name: captain.userId?.name,
+246       avatar: captain.userId?.avatar,
+247       phone: captain.userId?.phone,
+248       vehicleType: captain.vehicleType,
 249       vehicleModel: captain.vehicleModel,
 250       vehicleColor: captain.vehicleColor,
-251       plateNumber:  captain.plateNumber,
-252       rating:       captain.rating,
+251       plateNumber: captain.plateNumber,
+252       rating: captain.rating,
 253     },
 254   });
 255 
@@ -3819,7 +4154,7 @@
 257     title: 'تم قبول رحلتك ✓',
 258     body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
 259     data: { type: 'trip:accepted', tripId: trip._id.toString() },
-260   }).catch(() => {});
+260   }).catch(() => { });
 261 
 262   logger.info(`[Trip] ${tripId} accepted by ${captainUserId}`);
 263   return tripRepo.findByIdPopulated(tripId);
@@ -3846,7 +4181,7 @@
 284       title: 'الكابتن وصل 🚗',
 285       body: 'الكابتن في موقعك، توجه إليه',
 286       data: { type: 'captain:arrived', tripId },
-287     }).catch(() => {});
+287     }).catch(() => { });
 288   }
 289 
 290   if (newStatus === 'started') {
@@ -3854,7 +4189,7 @@
 292       title: 'انطلقت رحلتك 🚀',
 293       body: 'الكابتن بدأ الرحلة — استمتع بالرحلة',
 294       data: { type: 'trip:started', tripId },
-295     }).catch(() => {});
+295     }).catch(() => { });
 296   }
 297 
 298   logger.info(`[Trip] ${tripId} → ${newStatus}`);
@@ -3862,8 +4197,8 @@
 300 };
 301 
 302 const markOnTheWay = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'onTheWay');
-303 const markArrived  = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'arrived');
-304 const startTrip    = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'started');
+303 const markArrived = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'arrived');
+304 const startTrip = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'started');
 305 
 306 // ── Captain: end trip ─────────────────────────────────────────────────
 307 const endTrip = async (tripId, captainUserId, distanceKm) => {
@@ -3890,13 +4225,13 @@
 328     title: 'وصلت! 🎉',
 329     body: `المبلغ الإجمالي: ${fare.total} ريال`,
 330     data: { type: 'trip:ended', tripId, fare: String(fare.total) },
-331   }).catch(() => {});
+331   }).catch(() => { });
 332 
 333   notificationService.notify(captainUserId, {
 334     title: 'انتهت الرحلة ✓',
 335     body: `المبلغ: ${fare.total} ريال — ${distanceKm.toFixed(1)} كم`,
 336     data: { type: 'trip:ended', tripId, fare: String(fare.total) },
-337   }).catch(() => {});
+337   }).catch(() => { });
 338 
 339   logger.info(`[Trip] ${tripId} ended | km=${distanceKm} | fare=${fare.total}`);
 340   return trip;
@@ -3905,145 +4240,157 @@
 343 // ── Either party: cancel active trip (no tripId needed) ──────────────
 344 // Used by POST /trips/cancel — resolves the caller's current active trip
 345 // then delegates to the normal cancelTrip flow.
-346 const cancelCurrentTrip = async (userId, role, reason) => {
-347   let trip;
-348   if (role === 'passenger') {
-349     trip = await tripRepo.findOne({ passengerId: userId, status: { $in: ACTIVE_STATUSES } });
-350   } else if (role === 'captain') {
-351     const captain = await captainRepo.findByUserId(userId);
-352     if (!captain) throw Object.assign(new Error('Captain profile not found'), { status: 404 });
-353     trip = await tripRepo.findOne({ captainId: captain._id, status: { $in: ACTIVE_STATUSES } });
-354   }
-355   if (!trip) throw Object.assign(new Error('No active trip found'), { status: 404 });
-356   return cancelTrip(trip._id.toString(), userId, role, reason);
-357 };
-358 
-359 // ── Either party: cancel ──────────────────────────────────────────────
-360 const cancelTrip = async (tripId, userId, role, reason) => {
-361   const trip = await tripRepo.findById(tripId);
-362   if (!trip) throw new Error('Trip not found');
-363   if (!trip.canTransitionTo('cancelled')) throw new Error('Cannot cancel trip in current state');
+346 // أضف هذه الوظيفة أو عدّل الموجودة
+347 // داخل src/modules/trip/trip.service.js
+348 
+349 const cancelCurrentTrip = async (userId, role, reason) => {
+350   let trip;
+351   if (role === 'passenger') {
+352     trip = await tripRepo.findOne({ passengerId: userId, status: { $in: ACTIVE_STATUSES } });
+353   } else if (role === 'captain') {
+354     const captain = await captainRepo.findByUserId(userId);
+355     if (!captain) throw Object.assign(new Error('Captain profile not found'), { status: 404 });
+356     trip = await tripRepo.findOne({ captainId: captain._id, status: { $in: ACTIVE_STATUSES } });
+357   }
+358   // ✅ عدّل هذا الجزء - لا ترمي خطأ، بل ارجع نجاحاً
+359   if (!trip) {
+360     return { message: 'No active trip found, assuming already cancelled', alreadyCancelled: true };
+361   }
+362   return cancelTrip(trip._id.toString(), userId, role, reason);
+363 };
 364 
-365   if (role === 'passenger') {
-366     if (trip.passengerId.toString() !== userId.toString()) throw new Error('Unauthorized');
-367   } else if (role === 'captain') {
-368     const captain = await captainRepo.findByUserId(userId);
-369     if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
-370     await captainRepo.updateByUserId(userId, { isOnTrip: false });
-371   }
-372 
-373   trip.status = 'cancelled';
-374   trip.cancelledAt = new Date();
-375   trip.cancellationReason = reason || null;
-376   trip.cancelledBy = role;
-377   await tripRepo.saveDoc(trip);
-378 
-379   emitToTrip(tripId, 'trip:cancelled', { tripId, reason: reason || null, cancelledBy: role });
-380 
-381   // Notify the OTHER party
-382   const otherPartyId = role === 'passenger'
-383     ? trip.captainId && (await captainRepo.findById(trip.captainId))?.userId
-384     : trip.passengerId;
-385   if (otherPartyId) {
-386     notificationService.notify(otherPartyId, {
-387       title: 'تم إلغاء الرحلة',
-388       body: role === 'passenger' ? 'قام الراكب بإلغاء الرحلة' : 'قام الكابتن بإلغاء الرحلة',
-389       data: { type: 'trip:cancelled', tripId },
-390     }).catch(() => {});
-391   }
+365 // ── Either party: cancel ──────────────────────────────────────────────
+366 const cancelTrip = async (tripId, userId, role, reason) => {
+367   const trip = await tripRepo.findById(tripId);
+368   if (!trip) throw new Error('Trip not found');
+369 
+370   // ✅ أضف هذا الشرط أولاً - إذا كانت الرحلة ملغاة بالفعل
+371   if (trip.status === 'cancelled') {
+372     return { message: 'Trip already cancelled', alreadyCancelled: true };
+373   }
+374 
+375   if (!trip.canTransitionTo('cancelled')) throw new Error('Cannot cancel trip in current state');
+376 
+377   if (role === 'passenger') {
+378     if (trip.passengerId.toString() !== userId.toString()) throw new Error('Unauthorized');
+379   } else if (role === 'captain') {
+380     const captain = await captainRepo.findByUserId(userId);
+381     if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+382     await captainRepo.updateByUserId(userId, { isOnTrip: false });
+383   }
+384 
+385   trip.status = 'cancelled';
+386   trip.cancelledAt = new Date();
+387   trip.cancellationReason = reason || null;
+388   trip.cancelledBy = role;
+389   await tripRepo.saveDoc(trip);
+390 
+391   emitToTrip(tripId, 'trip:cancelled', { tripId, reason: reason || null, cancelledBy: role });
 392 
-393   logger.info(`[Trip] ${tripId} cancelled by ${role}`);
-394   return trip;
-395 };
-396 
-397 // ── Rating ────────────────────────────────────────────────────────────
-398 
-399 const rateCaptain = async (tripId, passengerId, { rating, tags = [] }) => {
-400   const trip = await tripRepo.findById(tripId);
-401   if (!trip) throw Object.assign(new Error('Trip not found'), { status: 404 });
-402   if (trip.passengerId.toString() !== passengerId.toString())
-403     throw Object.assign(new Error('Unauthorized'), { status: 403 });
-404   if (trip.status !== 'ended')
-405     throw Object.assign(new Error('Trip not ended'), { status: 400 });
-406   if (trip.passengerRating)
-407     throw Object.assign(new Error('Already rated'), { status: 409 });
+393   // Notify the OTHER party
+394   const otherPartyId = role === 'passenger'
+395     ? trip.captainId && (await captainRepo.findById(trip.captainId))?.userId
+396     : trip.passengerId;
+397   if (otherPartyId) {
+398     notificationService.notify(otherPartyId, {
+399       title: 'تم إلغاء الرحلة',
+400       body: role === 'passenger' ? 'قام الراكب بإلغاء الرحلة' : 'قام الكابتن بإلغاء الرحلة',
+401       data: { type: 'trip:cancelled', tripId },
+402     }).catch(() => { });
+403   }
+404 
+405   logger.info(`[Trip] ${tripId} cancelled by ${role}`);
+406   return trip;
+407 };
 408 
-409   trip.passengerRating = rating;
-410   trip.passengerRatingTags = tags;
-411   await tripRepo.saveDoc(trip);
-412 
-413   // Update captain's rolling average rating
-414   const captain = await captainRepo.findById(trip.captainId);
-415   if (captain) {
-416     const newCount = captain.totalTrips || 1;
-417     const oldRating = captain.rating || 0;
-418     const newRating = ((oldRating * (newCount - 1)) + rating) / newCount;
-419     await captainRepo.updateById(trip.captainId, { rating: Math.min(5, newRating) });
-420   }
-421 
-422   logger.info(`[Rating] trip=${tripId} captain rated ${rating} by passenger`);
-423   return trip;
-424 };
-425 
-426 const ratePassenger = async (tripId, captainUserId, { rating, tags = [] }) => {
-427   const trip = await tripRepo.findById(tripId);
-428   if (!trip) throw Object.assign(new Error('Trip not found'), { status: 404 });
-429 
-430   const captain = await captainRepo.findByUserId(captainUserId);
-431   if (!captain || trip.captainId.toString() !== captain._id.toString())
-432     throw Object.assign(new Error('Unauthorized'), { status: 403 });
-433   if (trip.status !== 'ended')
-434     throw Object.assign(new Error('Trip not ended'), { status: 400 });
-435   if (trip.captainRating)
-436     throw Object.assign(new Error('Already rated'), { status: 409 });
+409 // ── Rating ────────────────────────────────────────────────────────────
+410 
+411 const rateCaptain = async (tripId, passengerId, { rating, tags = [] }) => {
+412   const trip = await tripRepo.findById(tripId);
+413   if (!trip) throw Object.assign(new Error('Trip not found'), { status: 404 });
+414   if (trip.passengerId.toString() !== passengerId.toString())
+415     throw Object.assign(new Error('Unauthorized'), { status: 403 });
+416   if (trip.status !== 'ended')
+417     throw Object.assign(new Error('Trip not ended'), { status: 400 });
+418   if (trip.passengerRating)
+419     throw Object.assign(new Error('Already rated'), { status: 409 });
+420 
+421   trip.passengerRating = rating;
+422   trip.passengerRatingTags = tags;
+423   await tripRepo.saveDoc(trip);
+424 
+425   // Update captain's rolling average rating
+426   const captain = await captainRepo.findById(trip.captainId);
+427   if (captain) {
+428     const newCount = captain.totalTrips || 1;
+429     const oldRating = captain.rating || 0;
+430     const newRating = ((oldRating * (newCount - 1)) + rating) / newCount;
+431     await captainRepo.updateById(trip.captainId, { rating: Math.min(5, newRating) });
+432   }
+433 
+434   logger.info(`[Rating] trip=${tripId} captain rated ${rating} by passenger`);
+435   return trip;
+436 };
 437 
-438   trip.captainRating = rating;
-439   trip.captainRatingTags = tags;
-440   await tripRepo.saveDoc(trip);
+438 const ratePassenger = async (tripId, captainUserId, { rating, tags = [] }) => {
+439   const trip = await tripRepo.findById(tripId);
+440   if (!trip) throw Object.assign(new Error('Trip not found'), { status: 404 });
 441 
-442   logger.info(`[Rating] trip=${tripId} passenger rated ${rating} by captain`);
-443   return trip;
-444 };
-445 
-446 // ── GET /trips/current ────────────────────────────────────────────────
-447 const getCurrentTrip = async (userId, role) => {
-448   if (role === 'passenger') {
-449     return tripRepo.findOnePopulated({ passengerId: userId, status: { $in: ACTIVE_STATUSES } });
-450   }
-451   if (role === 'captain') {
-452     const captain = await captainRepo.findByUserId(userId);
-453     if (!captain) return null;
-454     return tripRepo.findOnePopulated({ captainId: captain._id, status: { $in: ACTIVE_STATUSES } });
-455   }
-456   return null;
-457 };
-458 
-459 const getTrip = (tripId) => tripRepo.findByIdPopulated(tripId);
-460 
-461 // ── POST /trips/estimate ──────────────────────────────────────────────
-462 const estimateFare = (startLat, startLng, endLat, endLng, carType = 'car') => {
-463   const distanceKm = haversineDistance(startLat, startLng, endLat, endLng);
-464   return { distanceKm: Math.round(distanceKm * 100) / 100, ...calcFareBreakdown(distanceKm, carType) };
-465 };
-466 
-467 module.exports = {
-468   searchTrip,
-469   estimateFare,
-470   captainAccepted,
-471   captainRejected,
-472   createTrip,
-473   acceptTrip,
-474   markOnTheWay,
-475   markArrived,
-476   startTrip,
-477   endTrip,
-478   cancelTrip,
-479   cancelCurrentTrip,
-480   rateCaptain,
-481   ratePassenger,
-482   getCurrentTrip,
-483   getTrip,
-484 };
+442   const captain = await captainRepo.findByUserId(captainUserId);
+443   if (!captain || trip.captainId.toString() !== captain._id.toString())
+444     throw Object.assign(new Error('Unauthorized'), { status: 403 });
+445   if (trip.status !== 'ended')
+446     throw Object.assign(new Error('Trip not ended'), { status: 400 });
+447   if (trip.captainRating)
+448     throw Object.assign(new Error('Already rated'), { status: 409 });
+449 
+450   trip.captainRating = rating;
+451   trip.captainRatingTags = tags;
+452   await tripRepo.saveDoc(trip);
+453 
+454   logger.info(`[Rating] trip=${tripId} passenger rated ${rating} by captain`);
+455   return trip;
+456 };
+457 
+458 // ── GET /trips/current ────────────────────────────────────────────────
+459 const getCurrentTrip = async (userId, role) => {
+460   if (role === 'passenger') {
+461     return tripRepo.findOnePopulated({ passengerId: userId, status: { $in: ACTIVE_STATUSES } });
+462   }
+463   if (role === 'captain') {
+464     const captain = await captainRepo.findByUserId(userId);
+465     if (!captain) return null;
+466     return tripRepo.findOnePopulated({ captainId: captain._id, status: { $in: ACTIVE_STATUSES } });
+467   }
+468   return null;
+469 };
+470 
+471 const getTrip = (tripId) => tripRepo.findByIdPopulated(tripId);
+472 
+473 // ── POST /trips/estimate ──────────────────────────────────────────────
+474 const estimateFare = (startLat, startLng, endLat, endLng, carType = 'car') => {
+475   const distanceKm = haversineDistance(startLat, startLng, endLat, endLng);
+476   return { distanceKm: Math.round(distanceKm * 100) / 100, ...calcFareBreakdown(distanceKm, carType) };
+477 };
+478 
+479 module.exports = {
+480   searchTrip,
+481   estimateFare,
+482   captainAccepted,
+483   captainRejected,
+484   createTrip,
+485   acceptTrip,
+486   markOnTheWay,
+487   markArrived,
+488   startTrip,
+489   endTrip,
+490   cancelTrip,
+491   cancelCurrentTrip,
+492   rateCaptain,
+493   ratePassenger,
+494   getCurrentTrip,
+495   getTrip,
+496 };
 ```
 
 ## File: `src\modules\trip\trip.socket.js`
