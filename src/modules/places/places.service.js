@@ -1,5 +1,9 @@
 const https = require('https');
 const { RecentSearch, SavedPlace } = require('./place.model');
+const {
+  autocompleteCache, placeDetailsCache, nearbyCache, reverseCache,
+  autocompleteKey, placeDetailsKey, nearbyKey, reverseKey,
+} = require('../../utils/api-cache.util');
 
 // ── Google API helper ─────────────────────────────────────────────────
 
@@ -23,8 +27,13 @@ function googleKey() {
 }
 
 // ── Autocomplete ──────────────────────────────────────────────────────
+// Cache: 1 h TTL, coarse 1.1 km location grid, Arabic-normalised query key.
 
 const autocomplete = async (input, lat, lng) => {
+  const cacheKey = autocompleteKey(input, lat, lng);
+  const hit = autocompleteCache.get(cacheKey);
+  if (hit) return hit;
+
   const params = new URLSearchParams({
     input,
     key:      googleKey(),
@@ -43,16 +52,24 @@ const autocomplete = async (input, lat, lng) => {
     throw new Error(`Google Autocomplete: ${data.status}`);
   }
 
-  return (data.predictions ?? []).map((p) => ({
+  const result = (data.predictions ?? []).map((p) => ({
     placeId:       p.place_id,
     mainText:      p.structured_formatting?.main_text      ?? p.description,
     secondaryText: p.structured_formatting?.secondary_text ?? '',
   }));
+
+  autocompleteCache.set(cacheKey, result);
+  return result;
 };
 
 // ── Place details ─────────────────────────────────────────────────────
+// Cache: 24 h TTL, keyed by stable place_id.
 
 const getDetails = async (placeId) => {
+  const cacheKey = placeDetailsKey(placeId);
+  const hit = placeDetailsCache.get(cacheKey);
+  if (hit) return hit;
+
   const params = new URLSearchParams({
     place_id: placeId,
     fields:   'geometry,formatted_address,name',
@@ -67,16 +84,24 @@ const getDetails = async (placeId) => {
   if (data.status !== 'OK') throw new Error(`Google Place Details: ${data.status}`);
 
   const loc = data.result.geometry?.location;
-  return {
+  const result = {
     lat:     loc?.lat,
     lng:     loc?.lng,
     address: data.result.formatted_address ?? data.result.name,
   };
+
+  placeDetailsCache.set(cacheKey, result);
+  return result;
 };
 
 // ── Nearby search ─────────────────────────────────────────────────────
+// Cache: 10 min TTL, 1.1 km coordinate grid.
 
 const nearbySearch = async (lat, lng, radius = 1500, limit = 10) => {
+  const cacheKey = nearbyKey(lat, lng, radius, limit);
+  const hit = nearbyCache.get(cacheKey);
+  if (hit) return hit;
+
   const params = new URLSearchParams({
     location: `${lat},${lng}`,
     radius:   String(radius),
@@ -92,16 +117,47 @@ const nearbySearch = async (lat, lng, radius = 1500, limit = 10) => {
     throw new Error(`Google Nearby Search: ${data.status}`);
   }
 
-  return (data.results ?? []).slice(0, limit).map((p) => ({
+  const result = (data.results ?? []).slice(0, limit).map((p) => ({
     placeId:       p.place_id,
     mainText:      p.name,
     secondaryText: p.vicinity ?? '',
     lat:           p.geometry?.location?.lat,
     lng:           p.geometry?.location?.lng,
   }));
+
+  nearbyCache.set(cacheKey, result);
+  return result;
 };
 
-// ── Recent searches ───────────────────────────────────────────────────
+// ── Reverse geocode ───────────────────────────────────────────────────
+// Cache: 24 h TTL, ~11 m coordinate grid.
+
+const reverseGeocode = async (lat, lng) => {
+  const cacheKey = reverseKey(lat, lng);
+  const hit = reverseCache.get(cacheKey);
+  if (hit) return hit;
+
+  const params = new URLSearchParams({
+    latlng:      `${lat},${lng}`,
+    key:         googleKey(),
+    language:    'ar',
+    result_type: 'street_address|route|neighborhood|locality',
+  });
+
+  const data = await httpsGet(
+    `https://maps.googleapis.com/maps/api/geocode/json?${params}`
+  );
+
+  if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+    throw new Error(`Google Geocode: ${data.status}`);
+  }
+
+  const result = { address: data.results?.[0]?.formatted_address ?? '' };
+  reverseCache.set(cacheKey, result);
+  return result;
+};
+
+// ── Recent searches (DB) ──────────────────────────────────────────────
 
 const getRecentSearches = (userId) =>
   RecentSearch.find({ userId }).sort({ createdAt: -1 }).limit(10).lean();
@@ -122,7 +178,7 @@ const saveRecentSearch = async (userId, { placeId, mainText, secondaryText = '' 
   }
 };
 
-// ── Saved places ──────────────────────────────────────────────────────
+// ── Saved places (DB) ─────────────────────────────────────────────────
 
 const getSavedPlaces = (userId) => SavedPlace.find({ userId }).lean();
 
@@ -132,28 +188,6 @@ const saveSavedPlace = (userId, { type, mainText, secondaryText = '', lat, lng }
     { userId, type, mainText, secondaryText, lat, lng },
     { upsert: true, new: true }
   );
-
-// ── Reverse geocode ───────────────────────────────────────────────────
-
-const reverseGeocode = async (lat, lng) => {
-  const params = new URLSearchParams({
-    latlng:   `${lat},${lng}`,
-    key:      googleKey(),
-    language: 'ar',
-    result_type: 'street_address|route|neighborhood|locality',
-  });
-
-  const data = await httpsGet(
-    `https://maps.googleapis.com/maps/api/geocode/json?${params}`
-  );
-
-  if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
-    throw new Error(`Google Geocode: ${data.status}`);
-  }
-
-  const address = data.results?.[0]?.formatted_address ?? '';
-  return { address };
-};
 
 module.exports = {
   autocomplete,

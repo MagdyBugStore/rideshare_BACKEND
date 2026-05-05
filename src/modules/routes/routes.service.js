@@ -1,8 +1,7 @@
 const https = require('https');
+const { polylineCache, polylineKey } = require('../../utils/api-cache.util');
 
-// In-memory route cache (5 min TTL)
-const _cache  = new Map();
-const TTL_MS  = 5 * 60 * 1000;
+// ── Google API helper ─────────────────────────────────────────────────
 
 function httpsGet(url) {
   return new Promise((resolve, reject) => {
@@ -17,13 +16,16 @@ function httpsGet(url) {
   });
 }
 
+// ── Route polyline ────────────────────────────────────────────────────
+// Cache: 10 min TTL, ~11 m coordinate grid on origin + destination.
+
 const getPolyline = async (originLat, originLng, destLat, destLng) => {
   const key = process.env.GOOGLE_MAPS_API_KEY;
   if (!key) throw new Error('GOOGLE_MAPS_API_KEY not configured');
 
-  const cacheKey = `${originLat},${originLng}->${destLat},${destLng}`;
-  const hit = _cache.get(cacheKey);
-  if (hit && hit.expiresAt > Date.now()) return hit.data;
+  const cacheKey = polylineKey(originLat, originLng, destLat, destLng);
+  const hit = polylineCache.get(cacheKey);
+  if (hit) return hit;
 
   const params = new URLSearchParams({
     origin:      `${originLat},${originLng}`,
@@ -47,7 +49,7 @@ const getPolyline = async (originLat, originLng, destLat, destLng) => {
     durationMins:    leg ? Math.ceil(leg.duration.value / 60) : 0,
   };
 
-  _cache.set(cacheKey, { data: result, expiresAt: Date.now() + TTL_MS });
+  polylineCache.set(cacheKey, result);
   return result;
 };
 
