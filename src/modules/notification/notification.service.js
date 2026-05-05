@@ -1,4 +1,5 @@
-const User = require('../user/user.model');
+const User         = require('../user/user.model');
+const Notification = require('./notification.model');
 const { isUserOnline } = require('../../socket');
 const { getMessaging } = require('../../config/firebase');
 const logger = require('../../config/logger');
@@ -25,9 +26,18 @@ const removeToken = async (userId, token) => {
   await User.findByIdAndUpdate(userId, { $pull: { fcmTokens: token } });
 };
 
-// Smart notify: socket if online, FCM push if offline.
+// Smart notify: persist to DB, then socket if online / FCM if offline.
 const notify = async (userId, { title, body, data = {} }) => {
   const userIdStr = userId.toString();
+
+  // Always persist so the notifications screen has history
+  Notification.create({
+    userId: userIdStr,
+    type:   data.type ?? 'general',
+    title,
+    body,
+    data,
+  }).catch((err) => logger.error('[Notify] DB save failed', err));
 
   if (isUserOnline(userIdStr)) {
     // User has an active socket — they'll get the realtime event. Skip FCM.
