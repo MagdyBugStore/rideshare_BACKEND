@@ -22,21 +22,29 @@ const applyCaptain = wrap(async (req, res) => {
       applicationCode: code,
       applicationStatus: 'pending_approval',
       status: 'pending_review',
-      vehicleType:  vehicleType  || undefined,
+      vehicleType: vehicleType || undefined,
       vehicleModel: vehicleModel || undefined,
-      plateNumber:  plateNumber  || undefined,
+      plateNumber: plateNumber || undefined,
       vehicleColor: vehicleColor || undefined,
     });
-    return sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus }, 'Captain application created', 201);
+    return sendSuccess(res, {
+      code: captain.applicationCode,
+      status: captain.applicationStatus
+    }, 'Captain application created', 201);
   }
 
-  if (vehicleType)  captain.vehicleType  = vehicleType;
+  if (vehicleType) captain.vehicleType = vehicleType;
   if (vehicleModel) captain.vehicleModel = vehicleModel;
-  if (plateNumber)  captain.plateNumber  = plateNumber;
+  if (plateNumber) captain.plateNumber = plateNumber;
   if (vehicleColor) captain.vehicleColor = vehicleColor;
 
   await captainRepo.saveDoc(captain);
-  sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus, vehicleInfoUpdated: true }, 'Captain data updated');
+
+  sendSuccess(res, {
+    code: captain.applicationCode,
+    status: captain.status,
+    vehicleInfoUpdated: true
+  }, 'Captain data updated');
 });
 
 const checkApplicationStatus = wrap(async (req, res) => {

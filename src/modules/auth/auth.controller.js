@@ -14,7 +14,23 @@ const googleLogin = wrap(async (req, res) => {
   const { idToken } = req.body;
   if (!idToken) return sendError(res, 'idToken required', 400);
   const result = await authService.loginWithGoogle(idToken);
-  sendSuccess(res, result, 'Google login successful');
+
+  sendSuccess(res, {
+    user: result.user,
+    captain: result.captain,    
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+  }, 'Google login successful');
+});
+
+const verifyOtp = wrap(async (req, res) => {
+  const result = await authService.verifyOtpAndLogin(req.body.phone, req.body.code, req.body.name);
+  sendSuccess(res, {
+    user: result.user,
+    captain: result.captain,    
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+  }, 'Login successful');
 });
 
 const refreshToken = wrap(async (req, res) => {
@@ -111,9 +127,6 @@ const sendOtp = wrap(async (req, res) => {
   sendSuccess(res, result, 'OTP sent');
 });
 
-const verifyOtp = wrap(async (req, res) => {
-  const result = await authService.verifyOtpAndLogin(req.body.phone, req.body.code, req.body.name);
-  sendSuccess(res, result, 'Login successful');
-});
+
 
 module.exports = { googleLogin, sendOtp, verifyOtp, refreshToken, logout, getCurrentUser, updateUserRole, updateProfile, uploadAvatar };

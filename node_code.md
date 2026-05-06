@@ -73,7 +73,7 @@
 ```json
 1 {
 2     "info": {
-3         "name": "Wasalni Admin APIs",
+3         "name": "Meshwari Admin APIs",
 4         "description": "مجموعة APIs لوحة تحكم الأدمن - بدون مصادقة حالياً",
 5         "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 6     },
@@ -1811,106 +1811,114 @@
 22       applicationCode: code,
 23       applicationStatus: 'pending_approval',
 24       status: 'pending_review',
-25       vehicleType:  vehicleType  || undefined,
+25       vehicleType: vehicleType || undefined,
 26       vehicleModel: vehicleModel || undefined,
-27       plateNumber:  plateNumber  || undefined,
+27       plateNumber: plateNumber || undefined,
 28       vehicleColor: vehicleColor || undefined,
 29     });
-30     return sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus }, 'Captain application created', 201);
-31   }
-32 
-33   if (vehicleType)  captain.vehicleType  = vehicleType;
-34   if (vehicleModel) captain.vehicleModel = vehicleModel;
-35   if (plateNumber)  captain.plateNumber  = plateNumber;
-36   if (vehicleColor) captain.vehicleColor = vehicleColor;
-37 
-38   await captainRepo.saveDoc(captain);
-39   sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus, vehicleInfoUpdated: true }, 'Captain data updated');
-40 });
-41 
-42 const checkApplicationStatus = wrap(async (req, res) => {
-43   const captain = await captainRepo.findByUserId(req.user.id);
-44   if (!captain) return sendError(res, 'No application found', 404);
-45   sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus });
-46 });
-47 
-48 const getStatus = wrap(async (req, res) => {
-49   const status = await captainService.getCaptainStatus(req.user.id);
-50   sendSuccess(res, status);
-51 });
-52 
-53 // ── Availability ──────────────────────────────────────────────────────
-54 const toggleOnline = wrap(async (req, res) => {
-55   const { isOnline } = req.body;
-56   const captain = await captainService.toggleOnline(req.user.id, isOnline);
-57   sendSuccess(res, { isOnline: captain.isOnline });
-58 });
-59 
-60 // ── Nearby captains (passenger-facing) ───────────────────────────────
-61 const getNearbyDrivers = wrap(async (req, res) => {
-62   const { lat, lng, radius } = req.query;
-63   if (!lat || !lng) return sendError(res, 'lat and lng are required', 400);
-64   const captains = await captainService.getNearbyDrivers(
-65     parseFloat(lat),
-66     parseFloat(lng),
-67     radius ? parseFloat(radius) : 5
-68   );
-69   sendSuccess(res, captains);
-70 });
-71 
-72 // ── Location (REST fallback) ──────────────────────────────────────────
-73 const updateLocation = wrap(async (req, res) => {
-74   const { lat, lng } = req.body;
-75   await captainService.updateLocation(req.user.id, lat, lng);
-76   sendSuccess(res, null, 'Location updated');
-77 });
-78 
-79 // ── Documents ─────────────────────────────────────────────────────────
-80 const uploadSingleDoc = wrap(async (req, res) => {
-81   const { type } = req.params;
-82   const allowed = ['nationalId', 'driverLicense', 'vehicleLicense', 'vehicleProxy'];
-83   if (!allowed.includes(type)) return sendError(res, 'Invalid document type', 400);
-84   if (!req.file) return sendError(res, 'No file uploaded', 400);
-85 
-86   await captainService.updateSingleDocument(req.user.id, type, req.file.path);
-87   sendSuccess(res, { field: type, url: req.file.path }, 'Document uploaded');
-88 });
-89 
-90 // ── Personal & vehicle info ───────────────────────────────────────────
-91 const updatePersonal = wrap(async (req, res) => {
-92   const captain = await captainService.updatePersonal(req.user.id, req.body);
-93   sendSuccess(res, captain, 'Personal info updated');
-94 });
-95 
-96 const updateVehicle = wrap(async (req, res) => {
-97   const captain = await captainService.updateVehicle(req.user.id, req.body);
-98   sendSuccess(res, captain, 'Vehicle info updated');
-99 });
-100 
-101 // ── Admin actions ─────────────────────────────────────────────────────
-102 const adminApprove = wrap(async (req, res) => {
-103   const captain = await captainService.approveCaptain(req.params.id);
-104   sendSuccess(res, captain, 'Captain approved');
-105 });
-106 
-107 const adminReject = wrap(async (req, res) => {
-108   const captain = await captainService.rejectCaptain(req.params.id, req.body.reason);
-109   sendSuccess(res, captain, 'Captain rejected');
-110 });
-111 
-112 module.exports = {
-113   applyCaptain,
-114   checkApplicationStatus,
-115   getStatus,
-116   toggleOnline,
-117   getNearbyDrivers,
-118   updateLocation,
-119   uploadSingleDoc,
-120   updatePersonal,
-121   updateVehicle,
-122   adminApprove,
-123   adminReject,
-124 };
+30     return sendSuccess(res, {
+31       code: captain.applicationCode,
+32       status: captain.applicationStatus
+33     }, 'Captain application created', 201);
+34   }
+35 
+36   if (vehicleType) captain.vehicleType = vehicleType;
+37   if (vehicleModel) captain.vehicleModel = vehicleModel;
+38   if (plateNumber) captain.plateNumber = plateNumber;
+39   if (vehicleColor) captain.vehicleColor = vehicleColor;
+40 
+41   await captainRepo.saveDoc(captain);
+42 
+43   sendSuccess(res, {
+44     code: captain.applicationCode,
+45     status: captain.status,
+46     vehicleInfoUpdated: true
+47   }, 'Captain data updated');
+48 });
+49 
+50 const checkApplicationStatus = wrap(async (req, res) => {
+51   const captain = await captainRepo.findByUserId(req.user.id);
+52   if (!captain) return sendError(res, 'No application found', 404);
+53   sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus });
+54 });
+55 
+56 const getStatus = wrap(async (req, res) => {
+57   const status = await captainService.getCaptainStatus(req.user.id);
+58   sendSuccess(res, status);
+59 });
+60 
+61 // ── Availability ──────────────────────────────────────────────────────
+62 const toggleOnline = wrap(async (req, res) => {
+63   const { isOnline } = req.body;
+64   const captain = await captainService.toggleOnline(req.user.id, isOnline);
+65   sendSuccess(res, { isOnline: captain.isOnline });
+66 });
+67 
+68 // ── Nearby captains (passenger-facing) ───────────────────────────────
+69 const getNearbyDrivers = wrap(async (req, res) => {
+70   const { lat, lng, radius } = req.query;
+71   if (!lat || !lng) return sendError(res, 'lat and lng are required', 400);
+72   const captains = await captainService.getNearbyDrivers(
+73     parseFloat(lat),
+74     parseFloat(lng),
+75     radius ? parseFloat(radius) : 5
+76   );
+77   sendSuccess(res, captains);
+78 });
+79 
+80 // ── Location (REST fallback) ──────────────────────────────────────────
+81 const updateLocation = wrap(async (req, res) => {
+82   const { lat, lng } = req.body;
+83   await captainService.updateLocation(req.user.id, lat, lng);
+84   sendSuccess(res, null, 'Location updated');
+85 });
+86 
+87 // ── Documents ─────────────────────────────────────────────────────────
+88 const uploadSingleDoc = wrap(async (req, res) => {
+89   const { type } = req.params;
+90   const allowed = ['nationalId', 'driverLicense', 'vehicleLicense', 'vehicleProxy'];
+91   if (!allowed.includes(type)) return sendError(res, 'Invalid document type', 400);
+92   if (!req.file) return sendError(res, 'No file uploaded', 400);
+93 
+94   await captainService.updateSingleDocument(req.user.id, type, req.file.path);
+95   sendSuccess(res, { field: type, url: req.file.path }, 'Document uploaded');
+96 });
+97 
+98 // ── Personal & vehicle info ───────────────────────────────────────────
+99 const updatePersonal = wrap(async (req, res) => {
+100   const captain = await captainService.updatePersonal(req.user.id, req.body);
+101   sendSuccess(res, captain, 'Personal info updated');
+102 });
+103 
+104 const updateVehicle = wrap(async (req, res) => {
+105   const captain = await captainService.updateVehicle(req.user.id, req.body);
+106   sendSuccess(res, captain, 'Vehicle info updated');
+107 });
+108 
+109 // ── Admin actions ─────────────────────────────────────────────────────
+110 const adminApprove = wrap(async (req, res) => {
+111   const captain = await captainService.approveCaptain(req.params.id);
+112   sendSuccess(res, captain, 'Captain approved');
+113 });
+114 
+115 const adminReject = wrap(async (req, res) => {
+116   const captain = await captainService.rejectCaptain(req.params.id, req.body.reason);
+117   sendSuccess(res, captain, 'Captain rejected');
+118 });
+119 
+120 module.exports = {
+121   applyCaptain,
+122   checkApplicationStatus,
+123   getStatus,
+124   toggleOnline,
+125   getNearbyDrivers,
+126   updateLocation,
+127   uploadSingleDoc,
+128   updatePersonal,
+129   updateVehicle,
+130   adminApprove,
+131   adminReject,
+132 };
 ```
 
 ## File: `src\modules\captain\captain.model.js`

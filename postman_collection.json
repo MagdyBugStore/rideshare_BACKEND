@@ -1,6 +1,6 @@
 {
     "info": {
-        "name": "Wasalni Admin APIs",
+        "name": "Meshwari Admin APIs",
         "description": "مجموعة APIs لوحة تحكم الأدمن - بدون مصادقة حالياً",
         "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
     },

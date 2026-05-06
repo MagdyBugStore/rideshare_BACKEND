@@ -4,6 +4,7 @@ const { generateTokens, verifyRefreshToken } = require('../../utils/jwt.util');
 const { generateOtp, hashOtp, verifyOtp } = require('../../utils/otp.util');
 const env = require('../../config/env');
 const logger = require('../../config/logger');
+const Captain = require('../captain/captain.model');
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
 const OTP_MAX_ATTEMPTS = 5;
@@ -12,6 +13,7 @@ const OTP_LOCKOUT_MINUTES = 30;
 // ─────────────────────────────────────────────────────────────
 // Google OAuth
 // ─────────────────────────────────────────────────────────────
+
 const loginWithGoogle = async (idToken) => {
   const payload = _decodeGoogleToken(idToken);
   const { googleId, email, name, picture } = payload;
@@ -26,7 +28,40 @@ const loginWithGoogle = async (idToken) => {
     await authRepo.saveDoc(user);
   }
 
-  return _issueTokens(user);
+  // ✅ جلب بيانات الكابتن إذا كان المستخدم كابتن
+  let captain = null;
+  let captainId = null;
+  let captainStatus = null;
+  
+  if (user.role === 'captain') {
+    captain = await Captain.findOne({ userId: user._id }).select(
+      'status isOnline vehicleType vehicleModel plateNumber vehicleColor rating totalTrips'
+    );
+    if (captain) {
+      captainId = captain._id;
+      captainStatus = captain.status;
+    }
+  }
+
+  const tokens = generateTokens(user._id, user.role);
+  await authRepo.addRefreshToken(user._id, tokens.refreshToken);
+
+  // بناء كائن المستخدم مع الحقول الإضافية
+  const userObj = user.toObject();
+  delete userObj.refreshTokens;
+  delete userObj.otpCode;
+  delete userObj.otpExpiresAt;
+
+  return {
+    user: {
+      ...userObj,
+      captainId,
+      captainStatus,
+    },
+    captain, // تفاصيل إضافية للكابتن (اختياري)
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+  };
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -164,7 +199,7 @@ function _decodeGoogleToken(idToken) {
         };
       }
     }
-  } catch (_) {}
+  } catch (_) { }
   return {
     googleId: `dev_${Date.now()}`,
     email: `dev_${Date.now()}@temp.com`,
