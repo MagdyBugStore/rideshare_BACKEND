@@ -1,28 +1,27 @@
+// src/modules/captain/captain.socket.js
+
 const captainRepo = require('./captain.repository');
 const logger = require('../../config/logger');
 const { emitToPassengers } = require('../../socket');
 
+const BROADCAST_RADIUS_KM = 10;
 const LOCATION_THROTTLE_MS = 3000;
-const DISCONNECT_GRACE_MS = 10000; // 10s grace period before marking offline
+const DISCONNECT_GRACE_MS = 10000;
 const _lastDbWrite = new Map();
-const _disconnectTimers = new Map(); // userId → timeout handle
+const _disconnectTimers = new Map();
 
 const register = (io, socket) => {
   if (socket.data.role !== 'captain') return;
 
   const userId = socket.data.userId;
+  let captainId = null;
+  let captainLocation = null;
 
-  // ── Go online ────────────────────────────────────────────────────
   socket.on('captain:go:online', async () => {
-     try {
+    try {
       const captain = await captainRepo.findByUserIdPopulated(userId);
       if (!captain || captain.status !== 'approved') {
         return socket.emit('error', { code: 'NOT_APPROVED', message: 'Captain not approved' });
-      }
-
-      // Profile completeness gate
-      if (!captain.vehicleType || !captain.vehicleModel || !captain.plateNumber) {
-        return socket.emit('error', { code: 'PROFILE_INCOMPLETE', message: 'Complete your vehicle profile first' });
       }
 
       captain.isOnline = true;
@@ -30,39 +29,39 @@ const register = (io, socket) => {
       captain.lastActiveAt = new Date();
       await captainRepo.saveDoc(captain);
 
-      // Cache Captain._id on socket for fast access in location updates
-      socket.data.captainId = captain._id.toString();
-      emitToPassengers('captain:appear', _formatAppear(captain));
-      socket.emit('captain:online:ack', { isOnline: true });
+      captainId = captain._id.toString();
+      socket.data.captainId = captainId;
+      captainLocation = captain.location?.coordinates
+        ? { lat: captain.location.coordinates[1], lng: captain.location.coordinates[0] }
+        : null;
 
+      _emitToNearbyPassengers(io, captainLocation, 'captain:appear', _formatAppear(captain));
+
+      socket.emit('captain:online:ack', { isOnline: true });
       logger.info(`[Captain Socket] ${userId} went online`);
     } catch (err) {
       logger.error('[Captain Socket] captain:go:online error', err);
     }
-
   });
 
-
-  // ── Go offline ───────────────────────────────────────────────────
-  socket.on('captain:go:offline', () => _setOffline(userId, socket));
-
-  // ── Location update (high frequency) ────────────────────────────
   socket.on('captain:location:update', async ({ lat, lng, heading = 0 }) => {
     if (lat == null || lng == null) return;
+    
+    const cId = socket.data.captainId || captainId;
+    console.log(`📍 [CAPTAIN MOVING] captainId: ${cId} | lat: ${lat}, lng: ${lng}`);
+    if (!cId) return;
 
-    const captainId = socket.data.captainId;
-    if (!captainId) return; // not online yet
+    captainLocation = { lat, lng };
 
-    // Instant broadcast to passengers (no DB wait)
-    emitToPassengers('captain:move', { captainId, lat, lng, heading });
+    // ✅ بث تحديث الموقع فقط للركاب القريبين
+    _emitToNearbyPassengers(io, captainLocation, 'captain:move', {
+      captainId: cId,
+      lat,
+      lng,
+      heading
+    });
 
-    // If captain is in a live trip, also broadcast to the trip room
-    const tripId = socket.data.activeTripId;
-    if (tripId) {
-      io.to(`trip:${tripId}`).emit('trip:location:update', { captainId, lat, lng, heading });
-    }
-
-    // Throttled DB write
+    // تحديث قاعدة البيانات (مثل السابق)
     const now = Date.now();
     if (now - (_lastDbWrite.get(userId) ?? 0) < LOCATION_THROTTLE_MS) return;
     _lastDbWrite.set(userId, now);
@@ -78,16 +77,18 @@ const register = (io, socket) => {
       .catch((err) => logger.error('[Captain Socket] location DB write error', err));
   });
 
-  // ── Auto-offline on disconnect (with 10s grace period for reconnects) ──
+  // ── Auto-offline on disconnect ──────────────────────────────────────────
   socket.on('disconnect', () => {
+    logger.info(`[Captain Socket] disconnect event fired for ${userId}`);
+
     const timer = setTimeout(() => {
       _disconnectTimers.delete(userId);
-      _setOffline(userId, socket);
+      // ✅ تمرير captainId المخزن
+      _setOffline(io, userId, socket.data.captainId || captainId, socket);
     }, DISCONNECT_GRACE_MS);
     _disconnectTimers.set(userId, timer);
   });
 
-  // Cancel pending offline timer if captain reconnects
   if (_disconnectTimers.has(userId)) {
     clearTimeout(_disconnectTimers.get(userId));
     _disconnectTimers.delete(userId);
@@ -95,26 +96,56 @@ const register = (io, socket) => {
   }
 };
 
-// ── Private ──────────────────────────────────────────────────────────
-async function _setOffline(userId, socket) {
-  try {
-    const captain = await captainRepo.findByUserId(userId);
-    if (!captain || !captain.isOnline) return;
 
-    // Guard against duplicate-socket race: a newer socket may have taken over
-    if (captain.socketId && captain.socketId !== socket.id) return;
+
+// ── Private ──────────────────────────────────────────────────────────
+async function _setOffline(io, userId, captainId, socket) {
+  try {
+    logger.info(`[Captain Socket] _setOffline called for userId=${userId}, captainId=${captainId}`);
+
+    // ✅ إذا لم يكن لدينا captainId نحاول جلبه من قاعدة البيانات
+    let finalCaptainId = captainId;
+    let captain = await captainRepo.findByUserId(userId);
+
+    if (!captain) {
+      logger.warn(`[Captain Socket] No captain found for userId=${userId}`);
+      return;
+    }
+
+    if (!finalCaptainId) {
+      finalCaptainId = captain._id.toString();
+    }
+
+    if (!captain.isOnline) {
+      logger.info(`[Captain Socket] Captain ${userId} already offline`);
+      return;
+    }
+
+    if (captain.socketId && captain.socketId !== socket.id) {
+      logger.info(`[Captain Socket] Socket mismatch for ${userId}: stored=${captain.socketId}, current=${socket.id}`);
+      return;
+    }
 
     captain.isOnline = false;
     captain.socketId = null;
     captain.lastActiveAt = new Date();
-    await captainRepo.saveDoc(captain);
+    await captain.save();
 
-    // Use socket.to instead of emitToPassengers so the emitter excludes itself
-    socket.to('passengers').emit('captain:disappear', { captainId: captain._id.toString() });
+    // ✅ استخدام io بدلاً من socket لإرسال الحدث
+    logger.info(`[Captain Socket] Emitting captain:disappear for captainId=${finalCaptainId}`);
+    io.to('passengers').emit('captain:disappear', { captainId: finalCaptainId });
+
     logger.info(`[Captain Socket] ${userId} went offline`);
   } catch (err) {
     logger.error('[Captain Socket] _setOffline error', err);
   }
+}
+
+
+function _emitToNearbyPassengers(io, _, event, data) {
+  console.log(`📡 [BROADCAST] Event: ${event} | name:`, data.name);
+  if (!io) return;
+  io.to('passengers').emit(event, data);
 }
 
 function _formatAppear(captain) {

@@ -23,9 +23,11 @@ const searchTrip = async (passengerId, startLocation, carType) => {
   const trip = await tripRepo.create({ passengerId, carType, startLocation, status: 'searching' });
 
   const captains = await captainRepo.findNearby(startLocation.lng, startLocation.lat, 5, carType);
+  
+  if (captains.length === 0) {
+    const expandedCaptains = await captainRepo.findNearby(startLocation.lng, startLocation.lat, 10, carType);
+  }
 
-  // Fire-and-forget — dispatch handles empty list by trying expanded radius then emitting
-  // trip:no_captain_found if nothing works. Passenger always gets the 202 + searching screen.
   _dispatchLoop(trip, captains, passenger).catch((err) =>
     logger.error('[Trip Dispatch] unhandled error', err)
   );
@@ -36,16 +38,31 @@ const searchTrip = async (passengerId, startLocation, carType) => {
 async function _dispatchLoop(trip, captains, passenger) {
   const toDispatch = captains.slice(0, MAX_DISPATCH_ATTEMPTS);
 
+  console.log(`🔄 [DISPATCH] Starting dispatch loop for trip ${trip._id}`);
+  console.log(`🔄 [DISPATCH] Will try ${toDispatch.length} captains initially`);
+
   for (const captain of toDispatch) {
     const freshTrip = await tripRepo.findById(trip._id);
-    if (!freshTrip || freshTrip.status !== 'searching') return; // Passenger cancelled
+    if (!freshTrip || freshTrip.status !== 'searching') {
+      console.log(`🔄 [DISPATCH] Trip ${trip._id} no longer searching, stopping dispatch`);
+      return;
+    }
 
     const captainUserId = captain.userId?._id?.toString() ?? captain.userId?.toString();
-    if (!captainUserId) continue;
+    if (!captainUserId) {
+      console.log(`🔄 [DISPATCH] Captain ${captain._id} has no userId, skipping`);
+      continue;
+    }
+
+    console.log(`🔄 [DISPATCH] Sending request to captain ${captainUserId}`);
 
     emitToUser(captainUserId, 'trip:request:incoming', {
       tripId: trip._id.toString(),
-      passenger: { id: passenger._id.toString(), name: passenger.name, avatar: passenger.avatar },
+      passenger: {
+        id: passenger._id.toString(),
+        name: passenger.name,
+        avatar: passenger.avatar
+      },
       startLocation: trip.startLocation,
       carType: trip.carType,
     });
@@ -57,11 +74,17 @@ async function _dispatchLoop(trip, captains, passenger) {
     }).catch(() => { });
 
     const result = await _awaitCaptainResponse(captainUserId).catch(() => null);
-    if (!result?.accepted) continue;
+    if (!result?.accepted) {
+      console.log(`🔄 [DISPATCH] Captain ${captainUserId} ${result ? 'rejected' : 'timed out'}`);
+      continue;
+    }
 
     // Attempt atomic lock — prevents race conditions if two captains accept simultaneously
     const locked = await tripRepo.atomicAccept(trip._id, captain._id);
-    if (!locked) continue; // Another captain was faster (shouldn't happen but guards against it)
+    if (!locked) {
+      console.log(`🔄 [DISPATCH] Atomic accept failed for ${captain._id}, another captain was faster`);
+      continue;
+    }
 
     await captainRepo.updateByUserId(captainUserId, { isOnTrip: true });
     const populated = await captainRepo.findByUserIdPopulated(captainUserId);
@@ -87,16 +110,20 @@ async function _dispatchLoop(trip, captains, passenger) {
       data: { type: 'trip:accepted', tripId: trip._id.toString() },
     }).catch(() => { });
 
-    logger.info(`[Trip Dispatch] ${trip._id} accepted by captain ${captainUserId}`);
+    console.log(`🔄 [DISPATCH] ✅ Trip ${trip._id} accepted by captain ${captainUserId}`);
     return;
   }
 
   // Initial radius failed — try expanded radius (once, up to 3 more captains)
+  console.log(`🔄 [DISPATCH] Initial dispatch failed, trying expanded radius (${EXPAND_RADIUS_KM}km)`);
+
   const expanded = await captainRepo.findNearby(
     trip.startLocation.lng, trip.startLocation.lat, EXPAND_RADIUS_KM, trip.carType
   );
   const seenIds = new Set(toDispatch.map((c) => c._id.toString()));
   const newCaptains = expanded.filter((c) => !seenIds.has(c._id.toString())).slice(0, 3);
+
+  console.log(`🔄 [DISPATCH] Found ${newCaptains.length} new captains in expanded radius`);
 
   for (const captain of newCaptains) {
     const freshTrip = await tripRepo.findById(trip._id);
@@ -105,9 +132,15 @@ async function _dispatchLoop(trip, captains, passenger) {
     const captainUserId = captain.userId?._id?.toString() ?? captain.userId?.toString();
     if (!captainUserId) continue;
 
+    console.log(`🔄 [DISPATCH] Sending request (expanded) to captain ${captainUserId}`);
+
     emitToUser(captainUserId, 'trip:request:incoming', {
       tripId: trip._id.toString(),
-      passenger: { id: passenger._id.toString(), name: passenger.name, avatar: passenger.avatar },
+      passenger: {
+        id: passenger._id.toString(),
+        name: passenger.name,
+        avatar: passenger.avatar
+      },
       startLocation: trip.startLocation,
       carType: trip.carType,
     });
@@ -147,11 +180,13 @@ async function _dispatchLoop(trip, captains, passenger) {
       data: { type: 'trip:accepted', tripId: trip._id.toString() },
     }).catch(() => { });
 
-    logger.info(`[Trip Dispatch] ${trip._id} accepted (expanded radius) by ${captainUserId}`);
+    console.log(`🔄 [DISPATCH] ✅ Trip ${trip._id} accepted (expanded radius) by ${captainUserId}`);
     return;
   }
 
   // No captain found — cancel trip and notify passenger
+  console.log(`🔄 [DISPATCH] ❌ No captain found for trip ${trip._id}`);
+
   const finalTrip = await tripRepo.findById(trip._id);
   if (finalTrip?.status === 'searching') {
     finalTrip.status = 'cancelled';
@@ -160,9 +195,14 @@ async function _dispatchLoop(trip, captains, passenger) {
     finalTrip.cancelledAt = new Date();
     await tripRepo.saveDoc(finalTrip);
   }
-  emitToUser(passenger._id.toString(), 'trip:no_captain_found', { tripId: trip._id.toString() });
+
+  emitToUser(passenger._id.toString(), 'trip:no_captain_found', {
+    tripId: trip._id.toString()
+  });
+
   logger.info(`[Trip Dispatch] ${trip._id} — no captain found`);
 }
+
 
 function _awaitCaptainResponse(captainUserId) {
   return new Promise((resolve, reject) => {

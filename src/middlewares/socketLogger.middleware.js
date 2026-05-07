@@ -37,23 +37,18 @@ const writeLog = (type, socketId, userId, event, data, direction) => {
   
   // كتابة في console بتنسيق مقروء
   if (direction === 'incoming') {
-    console.log(`📥 [Socket ${direction.toUpperCase()}] ${event} | socket:${socketId} | user:${userId}`);
     if (data && process.env.NODE_ENV !== 'production') {
-      console.log(`   Data:`, typeof data === 'object' ? JSON.stringify(data).slice(0, 200) : data);
     }
   } else if (direction === 'outgoing') {
-    console.log(`📤 [Socket ${direction.toUpperCase()}] ${event} | socket:${socketId}`);
   } else if (type === 'connection') {
-    console.log(`🔌 [Socket CONNECT] socket:${socketId} | user:${userId}`);
   } else if (type === 'disconnection') {
-    console.log(`🔌 [Socket DISCONNECT] socket:${socketId} | user:${userId}`);
   }
 };
 
 // إنشاء middleware لتسجيل الأحداث الواردة والصادرة
 const createSocketLogger = (io) => {
   return (socket, next) => {
-    // تسجيل الاتصال الجديد
+    
     socket.once('connection', () => {
       writeLog('connection', socket.id, socket.data?.userId, null, null);
     });
@@ -61,7 +56,7 @@ const createSocketLogger = (io) => {
     // حفظ الـ emit الأصلي لتسجيله
     const originalEmit = socket.emit;
     socket.emit = function(event, ...args) {
-      // تسجيل الرد الصادر
+    
       writeLog(
         'event',
         socket.id,
@@ -73,11 +68,9 @@ const createSocketLogger = (io) => {
       return originalEmit.apply(this, [event, ...args]);
     };
     
-    // تسجيل جميع الأحداث الواردة
     const originalOn = socket.on;
     socket.on = function(event, listener) {
       const wrappedListener = (...args) => {
-        // تسجيل الحدث الوارد
         writeLog(
           'event',
           socket.id,
@@ -95,15 +88,15 @@ const createSocketLogger = (io) => {
   };
 };
 
-// مراقبة الأحداث على مستوى الـ io (للتسجيل العام)
+
 const monitorIoEvents = (io) => {
-  // مراقبة الاتصالات الجديدة
+
   io.engine.on('connection', (socket) => {
     const socketId = socket.id;
     console.log(`🔌 [Engine.IO] New raw connection: ${socketId}`);
   });
   
-  // مراقبة الأخطاء
+
   io.engine.on('connection_error', (err) => {
     console.error(`❌ [Engine.IO] Connection error:`, err.message);
     logger.error('[Socket] Engine.IO connection error', err);

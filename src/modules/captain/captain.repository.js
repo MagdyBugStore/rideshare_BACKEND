@@ -20,6 +20,7 @@ const findNearby = (lng, lat, radiusKm = 5, carType = null) => {
     },
   };
   if (carType) filter.vehicleType = carType;
+
   return Captain.find(filter).populate('userId', 'name avatar phone').lean();
 };
 
