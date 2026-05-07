@@ -2,9 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('./admin.controller');
-// في حال أردت إضافة المصادقة لاحقاً، استخدم التالي:
-// const authMiddleware = require('../../middlewares/auth.middleware');
-// const { requireRole } = require('../../middlewares/role.middleware');
+const socketLogsController = require('./socketLogs.controller');
 
 // ==================== المستخدمون ====================
 // GET /api/admin/users - الحصول على جميع المستخدمين
@@ -51,5 +49,13 @@ router.delete('/trips/:tripId', controller.deleteTrip);
 // ==================== دوال قديمة للتوافق ====================
 // POST /api/admin/captain/approve-by-code - موافقة أو رفض بكود التقديم
 router.post('/captain/approve-by-code', controller.approveCaptainByCode);
+
+
+// ==================== Socket Monitoring ====================
+router.get('/socket-logs', socketLogsController.getSocketLogs);
+router.get('/socket-stats', socketLogsController.getSocketStats);
+router.delete('/socket-logs', socketLogsController.clearSocketLogs);
+router.get('/connected-users', socketLogsController.getConnectedUsers);  
+
 
 module.exports = router;

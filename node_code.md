@@ -788,6 +788,152 @@
 16 module.exports = { requireRole };
 ```
 
+## File: `src\middlewares\socketLogger.middleware.js`
+
+```javascript
+1 // src/middlewares/socketLogger.middleware.js
+2 const logger = require('../config/logger');
+3 const fs = require('fs');
+4 const path = require('path');
+5 
+6 // إنشاء مجلد logs إذا لم يكن موجوداً
+7 const logDir = path.join(__dirname, '../../logs');
+8 if (!fs.existsSync(logDir)) {
+9   fs.mkdirSync(logDir, { recursive: true });
+10 }
+11 
+12 // ملف مخصص لسجلات السوكيت
+13 const socketLogStream = fs.createWriteStream(
+14   path.join(logDir, 'socket-events.log'),
+15   { flags: 'a' }
+16 );
+17 
+18 // تنسيق الوقت
+19 const getTimestamp = () => new Date().toISOString();
+20 
+21 // كتابة السجل في الملف وفي console
+22 const writeLog = (type, socketId, userId, event, data, direction) => {
+23   const logEntry = {
+24     timestamp: getTimestamp(),
+25     type, // 'connection', 'disconnection', 'event'
+26     socketId,
+27     userId: userId || 'unknown',
+28     event: event || null,
+29     direction, // 'incoming' or 'outgoing'
+30     data: data ? (typeof data === 'object' ? JSON.stringify(data) : String(data)) : null,
+31   };
+32   
+33   const logString = JSON.stringify(logEntry) + '\n';
+34   
+35   // كتابة في الملف
+36   socketLogStream.write(logString);
+37   
+38   // كتابة في console بتنسيق مقروء
+39   if (direction === 'incoming') {
+40     console.log(`📥 [Socket ${direction.toUpperCase()}] ${event} | socket:${socketId} | user:${userId}`);
+41     if (data && process.env.NODE_ENV !== 'production') {
+42       console.log(`   Data:`, typeof data === 'object' ? JSON.stringify(data).slice(0, 200) : data);
+43     }
+44   } else if (direction === 'outgoing') {
+45     console.log(`📤 [Socket ${direction.toUpperCase()}] ${event} | socket:${socketId}`);
+46   } else if (type === 'connection') {
+47     console.log(`🔌 [Socket CONNECT] socket:${socketId} | user:${userId}`);
+48   } else if (type === 'disconnection') {
+49     console.log(`🔌 [Socket DISCONNECT] socket:${socketId} | user:${userId}`);
+50   }
+51 };
+52 
+53 // إنشاء middleware لتسجيل الأحداث الواردة والصادرة
+54 const createSocketLogger = (io) => {
+55   return (socket, next) => {
+56     // تسجيل الاتصال الجديد
+57     socket.once('connection', () => {
+58       writeLog('connection', socket.id, socket.data?.userId, null, null);
+59     });
+60     
+61     // حفظ الـ emit الأصلي لتسجيله
+62     const originalEmit = socket.emit;
+63     socket.emit = function(event, ...args) {
+64       // تسجيل الرد الصادر
+65       writeLog(
+66         'event',
+67         socket.id,
+68         socket.data?.userId,
+69         event,
+70         args[0],
+71         'outgoing'
+72       );
+73       return originalEmit.apply(this, [event, ...args]);
+74     };
+75     
+76     // تسجيل جميع الأحداث الواردة
+77     const originalOn = socket.on;
+78     socket.on = function(event, listener) {
+79       const wrappedListener = (...args) => {
+80         // تسجيل الحدث الوارد
+81         writeLog(
+82           'event',
+83           socket.id,
+84           socket.data?.userId,
+85           event,
+86           args[0],
+87           'incoming'
+88         );
+89         return listener.apply(this, args);
+90       };
+91       return originalOn.call(this, event, wrappedListener);
+92     };
+93     
+94     next();
+95   };
+96 };
+97 
+98 // مراقبة الأحداث على مستوى الـ io (للتسجيل العام)
+99 const monitorIoEvents = (io) => {
+100   // مراقبة الاتصالات الجديدة
+101   io.engine.on('connection', (socket) => {
+102     const socketId = socket.id;
+103     console.log(`🔌 [Engine.IO] New raw connection: ${socketId}`);
+104   });
+105   
+106   // مراقبة الأخطاء
+107   io.engine.on('connection_error', (err) => {
+108     console.error(`❌ [Engine.IO] Connection error:`, err.message);
+109     logger.error('[Socket] Engine.IO connection error', err);
+110   });
+111 };
+112 
+113 // بديل أبسط - تسجيل مباشر لكل شيء
+114 const simpleSocketLogger = {
+115   // تسجيل حدث واصل
+116   logIncoming: (socketId, userId, event, data) => {
+117     writeLog('event', socketId, userId, event, data, 'incoming');
+118   },
+119   
+120   // تسجيل حدث صادر
+121   logOutgoing: (socketId, userId, event, data) => {
+122     writeLog('event', socketId, userId, event, data, 'outgoing');
+123   },
+124   
+125   // تسجيل اتصال
+126   logConnection: (socketId, userId) => {
+127     writeLog('connection', socketId, userId, null, null, null);
+128   },
+129   
+130   // تسجيل قطع الاتصال
+131   logDisconnection: (socketId, userId, reason) => {
+132     writeLog('disconnection', socketId, userId, null, reason, null);
+133   },
+134 };
+135 
+136 module.exports = {
+137   createSocketLogger,
+138   monitorIoEvents,
+139   simpleSocketLogger,
+140   writeLog,
+141 };
+```
+
 ## File: `src\middlewares\upload.middleware.js`
 
 ```javascript
@@ -1083,57 +1229,63 @@
 2 const express = require('express');
 3 const router = express.Router();
 4 const controller = require('./admin.controller');
-5 // في حال أردت إضافة المصادقة لاحقاً، استخدم التالي:
-6 // const authMiddleware = require('../../middlewares/auth.middleware');
-7 // const { requireRole } = require('../../middlewares/role.middleware');
-8 
-9 // ==================== المستخدمون ====================
-10 // GET /api/admin/users - الحصول على جميع المستخدمين
-11 router.get('/users', controller.getUsers);
-12 
-13 // PATCH /api/admin/users/:userId - تعديل مستخدم
-14 router.patch('/users/:userId', controller.updateUser);
-15 
-16 // DELETE /api/admin/users/:userId - حذف مستخدم
-17 router.delete('/users/:userId', controller.deleteUser);
-18 
-19 // ==================== الكباتن ====================
-20 // GET /api/admin/captains - الحصول على جميع الكباتن
-21 router.get('/captains', controller.getAllCaptains);
-22 
-23 // POST /api/admin/captains - إضافة كابتن جديد
-24 router.post('/captains', controller.createCaptain);
-25 
-26 // PATCH /api/admin/captains/:captainId - تعديل كابتن
-27 router.patch('/captains/:captainId', controller.updateCaptain);
-28 
-29 // DELETE /api/admin/captains/:captainId - حذف كابتن
-30 router.delete('/captains/:captainId', controller.deleteCaptain);
-31 
-32 // GET /api/admin/captains/pending - الحصول على الكباتن المعلقين
-33 router.get('/captains/pending', controller.getPendingCaptains);
-34 
-35 // PATCH /api/admin/captains/:captainId/approve - الموافقة على كابتن
-36 router.patch('/captains/:captainId/approve', controller.approveCaptain);
-37 
-38 // PATCH /api/admin/captains/:captainId/reject - رفض كابتن
-39 router.patch('/captains/:captainId/reject', controller.rejectCaptain);
-40 
-41 // ==================== الرحلات ====================
-42 // GET /api/admin/trips/live - الحصول على الرحلات النشطة
-43 router.get('/trips/live', controller.getLiveTrips);
-44 
-45 // POST /api/admin/trips - إنشاء رحلة
-46 router.post('/trips', controller.createTrip);
-47 
-48 // DELETE /api/admin/trips/:tripId - حذف رحلة
-49 router.delete('/trips/:tripId', controller.deleteTrip);
-50 
-51 // ==================== دوال قديمة للتوافق ====================
-52 // POST /api/admin/captain/approve-by-code - موافقة أو رفض بكود التقديم
-53 router.post('/captain/approve-by-code', controller.approveCaptainByCode);
-54 
-55 module.exports = router;
+5 const socketLogsController = require('./socketLogs.controller');
+6 
+7 // ==================== المستخدمون ====================
+8 // GET /api/admin/users - الحصول على جميع المستخدمين
+9 router.get('/users', controller.getUsers);
+10 
+11 // PATCH /api/admin/users/:userId - تعديل مستخدم
+12 router.patch('/users/:userId', controller.updateUser);
+13 
+14 // DELETE /api/admin/users/:userId - حذف مستخدم
+15 router.delete('/users/:userId', controller.deleteUser);
+16 
+17 // ==================== الكباتن ====================
+18 // GET /api/admin/captains - الحصول على جميع الكباتن
+19 router.get('/captains', controller.getAllCaptains);
+20 
+21 // POST /api/admin/captains - إضافة كابتن جديد
+22 router.post('/captains', controller.createCaptain);
+23 
+24 // PATCH /api/admin/captains/:captainId - تعديل كابتن
+25 router.patch('/captains/:captainId', controller.updateCaptain);
+26 
+27 // DELETE /api/admin/captains/:captainId - حذف كابتن
+28 router.delete('/captains/:captainId', controller.deleteCaptain);
+29 
+30 // GET /api/admin/captains/pending - الحصول على الكباتن المعلقين
+31 router.get('/captains/pending', controller.getPendingCaptains);
+32 
+33 // PATCH /api/admin/captains/:captainId/approve - الموافقة على كابتن
+34 router.patch('/captains/:captainId/approve', controller.approveCaptain);
+35 
+36 // PATCH /api/admin/captains/:captainId/reject - رفض كابتن
+37 router.patch('/captains/:captainId/reject', controller.rejectCaptain);
+38 
+39 // ==================== الرحلات ====================
+40 // GET /api/admin/trips/live - الحصول على الرحلات النشطة
+41 router.get('/trips/live', controller.getLiveTrips);
+42 
+43 // POST /api/admin/trips - إنشاء رحلة
+44 router.post('/trips', controller.createTrip);
+45 
+46 // DELETE /api/admin/trips/:tripId - حذف رحلة
+47 router.delete('/trips/:tripId', controller.deleteTrip);
+48 
+49 // ==================== دوال قديمة للتوافق ====================
+50 // POST /api/admin/captain/approve-by-code - موافقة أو رفض بكود التقديم
+51 router.post('/captain/approve-by-code', controller.approveCaptainByCode);
+52 
+53 
+54 // ==================== Socket Monitoring ====================
+55 router.get('/socket-logs', socketLogsController.getSocketLogs);
+56 router.get('/socket-stats', socketLogsController.getSocketStats);
+57 router.delete('/socket-logs', socketLogsController.clearSocketLogs);
+58 router.get('/connected-users', socketLogsController.getConnectedUsers);  
+59 
+60 
+61 module.exports = router;
 ```
 
 ## File: `src\modules\admin\admin.service.js`
@@ -1342,6 +1494,180 @@
 201 };
 ```
 
+## File: `src\modules\admin\socketLogs.controller.js`
+
+```javascript
+1 // src/modules/admin/socketLogs.controller.js
+2 const fs = require('fs');
+3 const path = require('path');
+4 const { sendSuccess, sendError } = require('../../utils/response.util');
+5 
+6 const logFilePath = path.join(__dirname, '../../../logs/socket-events.log');
+7 
+8 const getSocketLogs = async (req, res, next) => {
+9   try {
+10     const { limit = 100, type, event, userId, socketId } = req.query;
+11     
+12     if (!fs.existsSync(logFilePath)) {
+13       return sendSuccess(res, { logs: [], message: 'No logs file found' });
+14     }
+15     
+16     const content = fs.readFileSync(logFilePath, 'utf8');
+17     const lines = content.trim().split('\n').filter(l => l.trim());
+18     
+19     let logs = lines.map(line => {
+20       try {
+21         return JSON.parse(line);
+22       } catch (e) {
+23         return { raw: line };
+24       }
+25     });
+26     
+27     // تطبيق الفلاتر
+28     if (type) {
+29       logs = logs.filter(l => l.type === type);
+30     }
+31     if (event) {
+32       logs = logs.filter(l => l.event === event);
+33     }
+34     if (userId) {
+35       logs = logs.filter(l => l.userId === userId);
+36     }
+37     if (socketId) {
+38       logs = logs.filter(l => l.socketId === socketId);
+39     }
+40     
+41     // ترتيب تنازلي (الأحدث أولاً)
+42     logs = logs.reverse().slice(0, parseInt(limit));
+43     
+44     sendSuccess(res, {
+45       logs,
+46       total: logs.length,
+47       filePath: logFilePath,
+48     });
+49   } catch (error) {
+50     next(error);
+51   }
+52 };
+53 
+54 const getSocketStats = async (req, res, next) => {
+55   try {
+56     if (!fs.existsSync(logFilePath)) {
+57       return sendSuccess(res, { stats: null, message: 'No logs file found' });
+58     }
+59     
+60     const content = fs.readFileSync(logFilePath, 'utf8');
+61     const lines = content.trim().split('\n').filter(l => l.trim());
+62     
+63     const stats = {
+64       totalEvents: 0,
+65       incomingEvents: 0,
+66       outgoingEvents: 0,
+67       connections: 0,
+68       disconnections: 0,
+69       uniqueUsers: new Set(),
+70       eventsByType: {},
+71     };
+72     
+73     lines.forEach(line => {
+74       try {
+75         const log = JSON.parse(line);
+76         stats.totalEvents++;
+77         
+78         if (log.type === 'connection') {
+79           stats.connections++;
+80           if (log.userId) stats.uniqueUsers.add(log.userId);
+81         } else if (log.type === 'disconnection') {
+82           stats.disconnections++;
+83         } else if (log.type === 'event') {
+84           if (log.direction === 'incoming') stats.incomingEvents++;
+85           if (log.direction === 'outgoing') stats.outgoingEvents++;
+86           
+87           if (log.event) {
+88             stats.eventsByType[log.event] = (stats.eventsByType[log.event] || 0) + 1;
+89           }
+90         }
+91       } catch (e) {}
+92     });
+93     
+94     stats.uniqueUsers = stats.uniqueUsers.size;
+95     
+96     sendSuccess(res, stats);
+97   } catch (error) {
+98     next(error);
+99   }
+100 };
+101 
+102 const clearSocketLogs = async (req, res, next) => {
+103   try {
+104     if (fs.existsSync(logFilePath)) {
+105       fs.writeFileSync(logFilePath, '');
+106       sendSuccess(res, null, 'Socket logs cleared successfully');
+107     } else {
+108       sendSuccess(res, null, 'No logs file to clear');
+109     }
+110   } catch (error) {
+111     next(error);
+112   }
+113 };
+114 
+115 const getConnectedUsers = async (req, res, next) => {
+116   try {
+117     const { getIo } = require('../../socket');
+118     const io = getIo();
+119     
+120     // الحصول على جميع الغرف
+121     const rooms = io.sockets.adapter.rooms;
+122     
+123     // عدد الركاب في غرفة passengers
+124     const passengersRoom = rooms.get('passengers');
+125     const passengersCount = passengersRoom?.size || 0;
+126     
+127     // الحصول على تفاصيل الركاب المتصلين
+128     const passengers = [];
+129     const captains = [];
+130     const allSockets = await io.fetchSockets();
+131     
+132     for (const socket of allSockets) {
+133       if (socket.data.role === 'passenger') {
+134         passengers.push({
+135           socketId: socket.id,
+136           userId: socket.data.userId,
+137           rooms: Array.from(socket.rooms),
+138         });
+139       } else if (socket.data.role === 'captain') {
+140         captains.push({
+141           socketId: socket.id,
+142           userId: socket.data.userId,
+143           rooms: Array.from(socket.rooms),
+144         });
+145       }
+146     }
+147     
+148     sendSuccess(res, {
+149       passengersCount,
+150       passengers,
+151       captainsCount: captains.length,
+152       captains,
+153       totalConnected: allSockets.length,
+154       rooms: {
+155         passengers: passengersCount,
+156         allRooms: Array.from(rooms.keys()).filter(r => !r.startsWith('/#')).slice(0, 20),
+157       }
+158     });
+159   } catch (error) {
+160     next(error);
+161   }
+162 };
+163 
+164 module.exports = {
+165   getSocketLogs,
+166   getSocketStats,
+167   clearSocketLogs,
+168   getConnectedUsers,
+169 };
+```
+
 ## File: `src\modules\auth\auth.controller.js`
 
 ```javascript
@@ -1361,109 +1687,122 @@
 14   const { idToken } = req.body;
 15   if (!idToken) return sendError(res, 'idToken required', 400);
 16   const result = await authService.loginWithGoogle(idToken);
-17   sendSuccess(res, result, 'Google login successful');
-18 });
-19 
-20 const refreshToken = wrap(async (req, res) => {
-21   const { refreshToken } = req.body;
-22   if (!refreshToken) return sendError(res, 'Refresh token required', 400);
-23   const result = await authService.refreshAccessToken(refreshToken);
-24   sendSuccess(res, result, 'Token refreshed');
-25 });
-26 
-27 const logout = wrap(async (req, res) => {
-28   await authService.logout(req.user.id, req.body?.refreshToken);
-29   sendSuccess(res, null, 'Logged out successfully');
-30 });
-31 
-32 const getCurrentUser = wrap(async (req, res) => {
-33   const user = await userRepo.findById(req.user.id);
-34   if (!user) return sendError(res, 'User not found', 404);
+17 
+18   sendSuccess(res, {
+19     user: result.user,
+20     captain: result.captain,    
+21     accessToken: result.accessToken,
+22     refreshToken: result.refreshToken,
+23   }, 'Google login successful');
+24 });
+25 
+26 const verifyOtp = wrap(async (req, res) => {
+27   const result = await authService.verifyOtpAndLogin(req.body.phone, req.body.code, req.body.name);
+28   sendSuccess(res, {
+29     user: result.user,
+30     captain: result.captain,    
+31     accessToken: result.accessToken,
+32     refreshToken: result.refreshToken,
+33   }, 'Login successful');
+34 });
 35 
-36   let captain = null;
-37   if (user.role === 'captain') {
-38     captain = await Captain.findOne({ userId: user._id }).select(
-39       'status isOnline applicationStatus rejectionReason vehicleType vehicleModel plateNumber vehicleColor'
-40     );
-41   }
+36 const refreshToken = wrap(async (req, res) => {
+37   const { refreshToken } = req.body;
+38   if (!refreshToken) return sendError(res, 'Refresh token required', 400);
+39   const result = await authService.refreshAccessToken(refreshToken);
+40   sendSuccess(res, result, 'Token refreshed');
+41 });
 42 
-43   sendSuccess(res, { user, captain });
-44 });
-45 
-46 const updateUserRole = wrap(async (req, res) => {
-47   const { role } = req.body;
-48   if (!['passenger', 'captain'].includes(role)) {
-49     return sendError(res, 'Invalid role', 400);
-50   }
+43 const logout = wrap(async (req, res) => {
+44   await authService.logout(req.user.id, req.body?.refreshToken);
+45   sendSuccess(res, null, 'Logged out successfully');
+46 });
+47 
+48 const getCurrentUser = wrap(async (req, res) => {
+49   const user = await userRepo.findById(req.user.id);
+50   if (!user) return sendError(res, 'User not found', 404);
 51 
-52   const user = await userRepo.updateById(
-53     req.user.id,
-54     { role },
-55     { runValidators: true, select: '-refreshToken -otpCode -otpExpiresAt' }
-56   );
-57   if (!user) return sendError(res, 'User not found', 404);
+52   let captain = null;
+53   if (user.role === 'captain') {
+54     captain = await Captain.findOne({ userId: user._id }).select(
+55       'status isOnline applicationStatus rejectionReason vehicleType vehicleModel plateNumber vehicleColor'
+56     );
+57   }
 58 
-59   let applicationCode = null;
-60   if (role === 'captain') {
-61     const existing = await Captain.findOne({ userId: user._id });
-62     if (!existing) {
-63       const code = generateApplicationCode();
-64       await Captain.create({
-65         userId: user._id,
-66         applicationCode: code,
-67         applicationStatus: 'pending_approval',
-68         status: 'pending_review',
-69       });
-70       applicationCode = code;
-71     }
-72   }
-73 
-74   const tokens = generateTokens(user._id, user.role);
-75   user.refreshToken = tokens.refreshToken;
-76   await user.save();
-77 
-78   sendSuccess(res, {
-79     user,
-80     accessToken: tokens.accessToken,
-81     refreshToken: tokens.refreshToken,
-82     applicationCode,
-83   }, 'Role updated');
-84 });
-85 
-86 const updateProfile = wrap(async (req, res) => {
-87   const { name, phone } = req.body;
-88   const user = await userRepo.updateById(
-89     req.user.id,
-90     { $set: { name, phone } },
-91     { select: '-refreshToken' }
-92   );
-93   sendSuccess(res, user, 'Profile updated');
-94 });
-95 
-96 const uploadAvatar = (req, res, next) => {
-97   uploadSingleDocument(req, res, async (err) => {
-98     if (err) return sendError(res, err.message, 400);
-99     if (!req.file) return sendError(res, 'No file uploaded', 400);
-100     try {
-101       const user = await userRepo.updateById(req.user.id, { avatar: req.file.path });
-102       sendSuccess(res, { avatar: req.file.path }, 'Avatar updated');
-103     } catch (e) {
-104       next(e);
-105     }
-106   });
-107 };
-108 
-109 const sendOtp = wrap(async (req, res) => {
-110   const result = await authService.sendOtp(req.body.phone);
-111   sendSuccess(res, result, 'OTP sent');
-112 });
-113 
-114 const verifyOtp = wrap(async (req, res) => {
-115   const result = await authService.verifyOtpAndLogin(req.body.phone, req.body.code, req.body.name);
-116   sendSuccess(res, result, 'Login successful');
-117 });
-118 
-119 module.exports = { googleLogin, sendOtp, verifyOtp, refreshToken, logout, getCurrentUser, updateUserRole, updateProfile, uploadAvatar };
+59   sendSuccess(res, { user, captain });
+60 });
+61 
+62 const updateUserRole = wrap(async (req, res) => {
+63   const { role } = req.body;
+64   if (!['passenger', 'captain'].includes(role)) {
+65     return sendError(res, 'Invalid role', 400);
+66   }
+67 
+68   const user = await userRepo.updateById(
+69     req.user.id,
+70     { role },
+71     { runValidators: true, select: '-refreshToken -otpCode -otpExpiresAt' }
+72   );
+73   if (!user) return sendError(res, 'User not found', 404);
+74 
+75   let applicationCode = null;
+76   if (role === 'captain') {
+77     const existing = await Captain.findOne({ userId: user._id });
+78     if (!existing) {
+79       const code = generateApplicationCode();
+80       await Captain.create({
+81         userId: user._id,
+82         applicationCode: code,
+83         applicationStatus: 'pending_approval',
+84         status: 'pending_review',
+85       });
+86       applicationCode = code;
+87     }
+88   }
+89 
+90   const tokens = generateTokens(user._id, user.role);
+91   user.refreshToken = tokens.refreshToken;
+92   await user.save();
+93 
+94   sendSuccess(res, {
+95     user,
+96     accessToken: tokens.accessToken,
+97     refreshToken: tokens.refreshToken,
+98     applicationCode,
+99   }, 'Role updated');
+100 });
+101 
+102 const updateProfile = wrap(async (req, res) => {
+103   const { name, phone } = req.body;
+104   const user = await userRepo.updateById(
+105     req.user.id,
+106     { $set: { name, phone } },
+107     { select: '-refreshToken' }
+108   );
+109   sendSuccess(res, user, 'Profile updated');
+110 });
+111 
+112 const uploadAvatar = (req, res, next) => {
+113   uploadSingleDocument(req, res, async (err) => {
+114     if (err) return sendError(res, err.message, 400);
+115     if (!req.file) return sendError(res, 'No file uploaded', 400);
+116     try {
+117       const user = await userRepo.updateById(req.user.id, { avatar: req.file.path });
+118       sendSuccess(res, { avatar: req.file.path }, 'Avatar updated');
+119     } catch (e) {
+120       next(e);
+121     }
+122   });
+123 };
+124 
+125 const sendOtp = wrap(async (req, res) => {
+126   const result = await authService.sendOtp(req.body.phone);
+127   sendSuccess(res, result, 'OTP sent');
+128 });
+129 
+130 
+131 
+132 module.exports = { googleLogin, sendOtp, verifyOtp, refreshToken, logout, getCurrentUser, updateUserRole, updateProfile, uploadAvatar };
 ```
 
 ## File: `src\modules\auth\auth.repository.js`
@@ -1542,194 +1881,229 @@
 4 const { generateOtp, hashOtp, verifyOtp } = require('../../utils/otp.util');
 5 const env = require('../../config/env');
 6 const logger = require('../../config/logger');
-7 
-8 const OTP_TTL_SECONDS = 300; // 5 minutes
-9 const OTP_MAX_ATTEMPTS = 5;
-10 const OTP_LOCKOUT_MINUTES = 30;
-11 
-12 // ─────────────────────────────────────────────────────────────
-13 // Google OAuth
-14 // ─────────────────────────────────────────────────────────────
-15 const loginWithGoogle = async (idToken) => {
-16   const payload = _decodeGoogleToken(idToken);
-17   const { googleId, email, name, picture } = payload;
-18 
-19   let user = await authRepo.findByGoogleOrEmail(googleId, email);
-20   if (!user) {
-21     user = await authRepo.createUser({ googleId, email, name, avatar: picture, role: null });
-22   } else {
-23     if (!user.googleId) user.googleId = googleId;
-24     if (!user.name && name) user.name = name;
-25     if (!user.avatar && picture) user.avatar = picture;
-26     await authRepo.saveDoc(user);
-27   }
-28 
-29   return _issueTokens(user);
-30 };
-31 
-32 // ─────────────────────────────────────────────────────────────
-33 // OTP — Step 1: Send
-34 // ─────────────────────────────────────────────────────────────
-35 const sendOtp = async (phone) => {
-36   let user = await userRepo.findOne({ phone });
-37 
-38   if (!user) {
-39     user = await userRepo.create({ name: phone, phone, role: null });
-40   }
-41 
-42   const otp = generateOtp();
-43   user.otpCode = hashOtp(otp);
-44   user.otpExpiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
-45   await authRepo.saveDoc(user);
-46 
-47   await _sendOtpViaSms(phone, otp);
+7 const Captain = require('../captain/captain.model');
+8 
+9 const OTP_TTL_SECONDS = 300; // 5 minutes
+10 const OTP_MAX_ATTEMPTS = 5;
+11 const OTP_LOCKOUT_MINUTES = 30;
+12 
+13 // ─────────────────────────────────────────────────────────────
+14 // Google OAuth
+15 // ─────────────────────────────────────────────────────────────
+16 
+17 const loginWithGoogle = async (idToken) => {
+18   const payload = _decodeGoogleToken(idToken);
+19   const { googleId, email, name, picture } = payload;
+20 
+21   let user = await authRepo.findByGoogleOrEmail(googleId, email);
+22   if (!user) {
+23     user = await authRepo.createUser({ googleId, email, name, avatar: picture, role: null });
+24   } else {
+25     if (!user.googleId) user.googleId = googleId;
+26     if (!user.name && name) user.name = name;
+27     if (!user.avatar && picture) user.avatar = picture;
+28     await authRepo.saveDoc(user);
+29   }
+30 
+31   // ✅ جلب بيانات الكابتن إذا كان المستخدم كابتن
+32   let captain = null;
+33   let captainId = null;
+34   let captainStatus = null;
+35   
+36   if (user.role === 'captain') {
+37     captain = await Captain.findOne({ userId: user._id }).select(
+38       'status isOnline vehicleType vehicleModel plateNumber vehicleColor rating totalTrips'
+39     );
+40     if (captain) {
+41       captainId = captain._id;
+42       captainStatus = captain.status;
+43     }
+44   }
+45 
+46   const tokens = generateTokens(user._id, user.role);
+47   await authRepo.addRefreshToken(user._id, tokens.refreshToken);
 48 
-49   logger.info(`[Auth] OTP sent to ${phone}`);
-50 
-51   return {
-52     message: 'OTP sent',
-53     expiresIn: OTP_TTL_SECONDS,
-54     ...(env.NODE_ENV !== 'production' && { devOtp: otp }),
-55   };
-56 };
-57 
-58 // ─────────────────────────────────────────────────────────────
-59 // OTP — Step 2: Verify + Login
-60 // ─────────────────────────────────────────────────────────────
-61 const verifyOtpAndLogin = async (phone, code, name) => {
-62   const user = await userRepo.findOne(
-63     { phone },
-64     '+otpCode +otpExpiresAt +otpAttempts +otpLockedUntil',
-65   );
-66   if (!user || !user.otpCode) throw new Error('OTP not found — request a new one');
-67 
-68   // Enforce lockout before anything else
-69   if (user.otpLockedUntil && user.otpLockedUntil > new Date()) {
-70     const remainingMin = Math.ceil((user.otpLockedUntil.getTime() - Date.now()) / 60000);
-71     throw new Error(`LOCKED:${remainingMin}`);
-72   }
-73 
-74   if (user.otpExpiresAt < new Date()) {
-75     user.otpCode = undefined;
-76     user.otpExpiresAt = undefined;
-77     await authRepo.saveDoc(user);
-78     throw new Error('OTP expired');
-79   }
-80 
-81   if (!verifyOtp(code, user.otpCode)) {
-82     user.otpAttempts = (user.otpAttempts || 0) + 1;
-83     if (user.otpAttempts >= OTP_MAX_ATTEMPTS) {
-84       user.otpLockedUntil = new Date(Date.now() + OTP_LOCKOUT_MINUTES * 60 * 1000);
-85       user.otpAttempts = 0;
-86       await authRepo.saveDoc(user);
-87       throw new Error(`LOCKED:${OTP_LOCKOUT_MINUTES}`);
-88     }
-89     const remaining = OTP_MAX_ATTEMPTS - user.otpAttempts;
-90     await authRepo.saveDoc(user);
-91     throw new Error(`Invalid OTP — ${remaining} ${remaining === 1 ? 'محاولة' : 'محاولات'} متبقية`);
-92   }
-93 
-94   // Success — clear OTP data and reset lockout state
-95   user.otpCode = undefined;
-96   user.otpExpiresAt = undefined;
-97   user.otpAttempts = 0;
-98   user.otpLockedUntil = undefined;
-99 
-100   if (name && (user.name === user.phone || !user.name)) {
-101     user.name = name;
-102   }
-103 
-104   await authRepo.saveDoc(user);
-105 
-106   logger.info(`[Auth] OTP verified for ${phone}`);
-107   return _issueTokens(user);
-108 };
-109 
-110 // ─────────────────────────────────────────────────────────────
-111 // Refresh token (with rotation)
-112 // ─────────────────────────────────────────────────────────────
-113 const refreshAccessToken = async (token) => {
-114   const decoded = verifyRefreshToken(token);
-115   if (!decoded) throw new Error('Invalid refresh token');
-116 
-117   const user = await authRepo.findByIdAndToken(decoded.id, token);
-118   if (!user) throw new Error('Refresh token not found or revoked');
-119 
-120   const { accessToken, refreshToken: newRefresh } = generateTokens(user._id, user.role);
-121 
-122   // Rotate: invalidate old token, register new one
-123   await authRepo.removeRefreshToken(user._id, token);
-124   await authRepo.addRefreshToken(user._id, newRefresh);
-125 
-126   return { accessToken, refreshToken: newRefresh };
-127 };
+49   // بناء كائن المستخدم مع الحقول الإضافية
+50   const userObj = user.toObject();
+51   delete userObj.refreshTokens;
+52   delete userObj.otpCode;
+53   delete userObj.otpExpiresAt;
+54 
+55   return {
+56     user: {
+57       ...userObj,
+58       captainId,
+59       captainStatus,
+60     },
+61     captain, // تفاصيل إضافية للكابتن (اختياري)
+62     accessToken: tokens.accessToken,
+63     refreshToken: tokens.refreshToken,
+64   };
+65 };
+66 
+67 // ─────────────────────────────────────────────────────────────
+68 // OTP — Step 1: Send
+69 // ─────────────────────────────────────────────────────────────
+70 const sendOtp = async (phone) => {
+71   let user = await userRepo.findOne({ phone });
+72 
+73   if (!user) {
+74     user = await userRepo.create({ name: phone, phone, role: null });
+75   }
+76 
+77   const otp = generateOtp();
+78   user.otpCode = hashOtp(otp);
+79   user.otpExpiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
+80   await authRepo.saveDoc(user);
+81 
+82   await _sendOtpViaSms(phone, otp);
+83 
+84   logger.info(`[Auth] OTP sent to ${phone}`);
+85 
+86   return {
+87     message: 'OTP sent',
+88     expiresIn: OTP_TTL_SECONDS,
+89     ...(env.NODE_ENV !== 'production' && { devOtp: otp }),
+90   };
+91 };
+92 
+93 // ─────────────────────────────────────────────────────────────
+94 // OTP — Step 2: Verify + Login
+95 // ─────────────────────────────────────────────────────────────
+96 const verifyOtpAndLogin = async (phone, code, name) => {
+97   const user = await userRepo.findOne(
+98     { phone },
+99     '+otpCode +otpExpiresAt +otpAttempts +otpLockedUntil',
+100   );
+101   if (!user || !user.otpCode) throw new Error('OTP not found — request a new one');
+102 
+103   // Enforce lockout before anything else
+104   if (user.otpLockedUntil && user.otpLockedUntil > new Date()) {
+105     const remainingMin = Math.ceil((user.otpLockedUntil.getTime() - Date.now()) / 60000);
+106     throw new Error(`LOCKED:${remainingMin}`);
+107   }
+108 
+109   if (user.otpExpiresAt < new Date()) {
+110     user.otpCode = undefined;
+111     user.otpExpiresAt = undefined;
+112     await authRepo.saveDoc(user);
+113     throw new Error('OTP expired');
+114   }
+115 
+116   if (!verifyOtp(code, user.otpCode)) {
+117     user.otpAttempts = (user.otpAttempts || 0) + 1;
+118     if (user.otpAttempts >= OTP_MAX_ATTEMPTS) {
+119       user.otpLockedUntil = new Date(Date.now() + OTP_LOCKOUT_MINUTES * 60 * 1000);
+120       user.otpAttempts = 0;
+121       await authRepo.saveDoc(user);
+122       throw new Error(`LOCKED:${OTP_LOCKOUT_MINUTES}`);
+123     }
+124     const remaining = OTP_MAX_ATTEMPTS - user.otpAttempts;
+125     await authRepo.saveDoc(user);
+126     throw new Error(`Invalid OTP — ${remaining} ${remaining === 1 ? 'محاولة' : 'محاولات'} متبقية`);
+127   }
 128 
-129 // ─────────────────────────────────────────────────────────────
-130 // Logout — single device (specific token) or all devices
-131 // ─────────────────────────────────────────────────────────────
-132 const logout = async (userId, refreshToken) => {
-133   if (refreshToken) {
-134     await authRepo.removeRefreshToken(userId, refreshToken);
-135   } else {
-136     await authRepo.clearAllRefreshTokens(userId);
+129   // Success — clear OTP data and reset lockout state
+130   user.otpCode = undefined;
+131   user.otpExpiresAt = undefined;
+132   user.otpAttempts = 0;
+133   user.otpLockedUntil = undefined;
+134 
+135   if (name && (user.name === user.phone || !user.name)) {
+136     user.name = name;
 137   }
-138 };
-139 
-140 // ─────────────────────────────────────────────────────────────
-141 // Helpers
-142 // ─────────────────────────────────────────────────────────────
-143 async function _issueTokens(user) {
-144   const { accessToken, refreshToken } = generateTokens(user._id, user.role);
-145   await authRepo.addRefreshToken(user._id, refreshToken);
-146   const safe = user.toObject();
-147   delete safe.refreshTokens;
-148   delete safe.otpCode;
-149   delete safe.otpExpiresAt;
-150   return { user: safe, accessToken, refreshToken };
-151 }
-152 
-153 function _decodeGoogleToken(idToken) {
-154   try {
-155     const parts = idToken.split('.');
-156     if (parts.length === 3) {
-157       const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-158       if (payload?.sub) {
-159         return {
-160           googleId: payload.sub,
-161           email: payload.email ?? null,
-162           name: payload.name || payload.email?.split('@')[0] || 'مستخدم',
-163           picture: payload.picture ?? null,
-164         };
-165       }
-166     }
-167   } catch (_) {}
-168   return {
-169     googleId: `dev_${Date.now()}`,
-170     email: `dev_${Date.now()}@temp.com`,
-171     name: 'مستخدم مؤقت',
-172     picture: null,
-173   };
-174 }
-175 
-176 async function _sendOtpViaSms(phone, otp) {
-177   if (env.NODE_ENV !== 'production') {
-178     logger.info(`[Auth] DEV OTP for ${phone}: ${otp}`);
-179     return;
-180   }
-181   try {
-182     const twilio = require('twilio')(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
-183     await twilio.messages.create({
-184       body: `كود التحقق لتاسك بدر: ${otp} — صالح لمدة 5 دقائق`,
-185       from: env.TWILIO_PHONE,
-186       to: `+2${phone}`,
-187     });
-188   } catch (err) {
-189     logger.error('[Auth] Twilio send failed', err);
-190     throw new Error('Failed to send OTP — please try again');
-191   }
-192 }
-193 
-194 module.exports = { loginWithGoogle, sendOtp, verifyOtpAndLogin, refreshAccessToken, logout };
+138 
+139   await authRepo.saveDoc(user);
+140 
+141   logger.info(`[Auth] OTP verified for ${phone}`);
+142   return _issueTokens(user);
+143 };
+144 
+145 // ─────────────────────────────────────────────────────────────
+146 // Refresh token (with rotation)
+147 // ─────────────────────────────────────────────────────────────
+148 const refreshAccessToken = async (token) => {
+149   const decoded = verifyRefreshToken(token);
+150   if (!decoded) throw new Error('Invalid refresh token');
+151 
+152   const user = await authRepo.findByIdAndToken(decoded.id, token);
+153   if (!user) throw new Error('Refresh token not found or revoked');
+154 
+155   const { accessToken, refreshToken: newRefresh } = generateTokens(user._id, user.role);
+156 
+157   // Rotate: invalidate old token, register new one
+158   await authRepo.removeRefreshToken(user._id, token);
+159   await authRepo.addRefreshToken(user._id, newRefresh);
+160 
+161   return { accessToken, refreshToken: newRefresh };
+162 };
+163 
+164 // ─────────────────────────────────────────────────────────────
+165 // Logout — single device (specific token) or all devices
+166 // ─────────────────────────────────────────────────────────────
+167 const logout = async (userId, refreshToken) => {
+168   if (refreshToken) {
+169     await authRepo.removeRefreshToken(userId, refreshToken);
+170   } else {
+171     await authRepo.clearAllRefreshTokens(userId);
+172   }
+173 };
+174 
+175 // ─────────────────────────────────────────────────────────────
+176 // Helpers
+177 // ─────────────────────────────────────────────────────────────
+178 async function _issueTokens(user) {
+179   const { accessToken, refreshToken } = generateTokens(user._id, user.role);
+180   await authRepo.addRefreshToken(user._id, refreshToken);
+181   const safe = user.toObject();
+182   delete safe.refreshTokens;
+183   delete safe.otpCode;
+184   delete safe.otpExpiresAt;
+185   return { user: safe, accessToken, refreshToken };
+186 }
+187 
+188 function _decodeGoogleToken(idToken) {
+189   try {
+190     const parts = idToken.split('.');
+191     if (parts.length === 3) {
+192       const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+193       if (payload?.sub) {
+194         return {
+195           googleId: payload.sub,
+196           email: payload.email ?? null,
+197           name: payload.name || payload.email?.split('@')[0] || 'مستخدم',
+198           picture: payload.picture ?? null,
+199         };
+200       }
+201     }
+202   } catch (_) { }
+203   return {
+204     googleId: `dev_${Date.now()}`,
+205     email: `dev_${Date.now()}@temp.com`,
+206     name: 'مستخدم مؤقت',
+207     picture: null,
+208   };
+209 }
+210 
+211 async function _sendOtpViaSms(phone, otp) {
+212   if (env.NODE_ENV !== 'production') {
+213     logger.info(`[Auth] DEV OTP for ${phone}: ${otp}`);
+214     return;
+215   }
+216   try {
+217     const twilio = require('twilio')(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+218     await twilio.messages.create({
+219       body: `كود التحقق لتاسك بدر: ${otp} — صالح لمدة 5 دقائق`,
+220       from: env.TWILIO_PHONE,
+221       to: `+2${phone}`,
+222     });
+223   } catch (err) {
+224     logger.error('[Auth] Twilio send failed', err);
+225     throw new Error('Failed to send OTP — please try again');
+226   }
+227 }
+228 
+229 module.exports = { loginWithGoogle, sendOtp, verifyOtpAndLogin, refreshAccessToken, logout };
 ```
 
 ## File: `src\modules\auth\auth.validation.js`
@@ -2219,7 +2593,7 @@
 14 
 15   // ── Go online ────────────────────────────────────────────────────
 16   socket.on('captain:go:online', async () => {
-17     try {
+17      try {
 18       const captain = await captainRepo.findByUserIdPopulated(userId);
 19       if (!captain || captain.status !== 'approved') {
 20         return socket.emit('error', { code: 'NOT_APPROVED', message: 'Captain not approved' });
@@ -2237,105 +2611,106 @@
 32 
 33       // Cache Captain._id on socket for fast access in location updates
 34       socket.data.captainId = captain._id.toString();
-35 
-36       emitToPassengers('captain:appear', _formatAppear(captain));
-37       socket.emit('captain:online:ack', { isOnline: true });
-38 
-39       logger.info(`[Captain Socket] ${userId} went online`);
-40     } catch (err) {
-41       logger.error('[Captain Socket] captain:go:online error', err);
-42     }
+35       emitToPassengers('captain:appear', _formatAppear(captain));
+36       socket.emit('captain:online:ack', { isOnline: true });
+37 
+38       logger.info(`[Captain Socket] ${userId} went online`);
+39     } catch (err) {
+40       logger.error('[Captain Socket] captain:go:online error', err);
+41     }
+42 
 43   });
 44 
-45   // ── Go offline ───────────────────────────────────────────────────
-46   socket.on('captain:go:offline', () => _setOffline(userId, socket));
-47 
-48   // ── Location update (high frequency) ────────────────────────────
-49   socket.on('captain:location:update', async ({ lat, lng, heading = 0 }) => {
-50     if (lat == null || lng == null) return;
-51 
-52     const captainId = socket.data.captainId;
-53     if (!captainId) return; // not online yet
-54 
-55     // Instant broadcast to passengers (no DB wait)
-56     emitToPassengers('captain:move', { captainId, lat, lng, heading });
-57 
-58     // If captain is in a live trip, also broadcast to the trip room
-59     const tripId = socket.data.activeTripId;
-60     if (tripId) {
-61       io.to(`trip:${tripId}`).emit('trip:location:update', { captainId, lat, lng, heading });
-62     }
-63 
-64     // Throttled DB write
-65     const now = Date.now();
-66     if (now - (_lastDbWrite.get(userId) ?? 0) < LOCATION_THROTTLE_MS) return;
-67     _lastDbWrite.set(userId, now);
-68 
-69     captainRepo
-70       .updateByUserId(userId, {
-71         $set: {
-72           location: { type: 'Point', coordinates: [lng, lat] },
-73           heading,
-74           lastLocationAt: new Date(),
-75         },
-76       })
-77       .catch((err) => logger.error('[Captain Socket] location DB write error', err));
-78   });
-79 
-80   // ── Auto-offline on disconnect (with 10s grace period for reconnects) ──
-81   socket.on('disconnect', () => {
-82     const timer = setTimeout(() => {
-83       _disconnectTimers.delete(userId);
-84       _setOffline(userId, socket);
-85     }, DISCONNECT_GRACE_MS);
-86     _disconnectTimers.set(userId, timer);
-87   });
-88 
-89   // Cancel pending offline timer if captain reconnects
-90   if (_disconnectTimers.has(userId)) {
-91     clearTimeout(_disconnectTimers.get(userId));
-92     _disconnectTimers.delete(userId);
-93     logger.info(`[Captain Socket] ${userId} reconnected — cancelled offline timer`);
-94   }
-95 };
-96 
-97 // ── Private ──────────────────────────────────────────────────────────
-98 async function _setOffline(userId, socket) {
-99   try {
-100     const captain = await captainRepo.findByUserId(userId);
-101     if (!captain || !captain.isOnline) return;
-102 
-103     // Guard against duplicate-socket race: a newer socket may have taken over
-104     if (captain.socketId && captain.socketId !== socket.id) return;
-105 
-106     captain.isOnline = false;
-107     captain.socketId = null;
-108     captain.lastActiveAt = new Date();
-109     await captainRepo.saveDoc(captain);
-110 
-111     // Use socket.to instead of emitToPassengers so the emitter excludes itself
-112     socket.to('passengers').emit('captain:disappear', { captainId: captain._id.toString() });
-113     logger.info(`[Captain Socket] ${userId} went offline`);
-114   } catch (err) {
-115     logger.error('[Captain Socket] _setOffline error', err);
-116   }
-117 }
-118 
-119 function _formatAppear(captain) {
-120   return {
-121     captainId: captain._id.toString(),
-122     name: captain.userId?.name,
-123     avatar: captain.userId?.avatar,
-124     vehicleType: captain.vehicleType,
-125     vehicleColor: captain.vehicleColor,
-126     lat: captain.location?.coordinates?.[1] ?? 0,
-127     lng: captain.location?.coordinates?.[0] ?? 0,
-128     heading: captain.heading ?? 0,
-129     rating: captain.rating ?? 0,
-130   };
-131 }
-132 
-133 module.exports = { register };
+45 
+46   // ── Go offline ───────────────────────────────────────────────────
+47   socket.on('captain:go:offline', () => _setOffline(userId, socket));
+48 
+49   // ── Location update (high frequency) ────────────────────────────
+50   socket.on('captain:location:update', async ({ lat, lng, heading = 0 }) => {
+51     if (lat == null || lng == null) return;
+52 
+53     const captainId = socket.data.captainId;
+54     if (!captainId) return; // not online yet
+55 
+56     // Instant broadcast to passengers (no DB wait)
+57     emitToPassengers('captain:move', { captainId, lat, lng, heading });
+58 
+59     // If captain is in a live trip, also broadcast to the trip room
+60     const tripId = socket.data.activeTripId;
+61     if (tripId) {
+62       io.to(`trip:${tripId}`).emit('trip:location:update', { captainId, lat, lng, heading });
+63     }
+64 
+65     // Throttled DB write
+66     const now = Date.now();
+67     if (now - (_lastDbWrite.get(userId) ?? 0) < LOCATION_THROTTLE_MS) return;
+68     _lastDbWrite.set(userId, now);
+69 
+70     captainRepo
+71       .updateByUserId(userId, {
+72         $set: {
+73           location: { type: 'Point', coordinates: [lng, lat] },
+74           heading,
+75           lastLocationAt: new Date(),
+76         },
+77       })
+78       .catch((err) => logger.error('[Captain Socket] location DB write error', err));
+79   });
+80 
+81   // ── Auto-offline on disconnect (with 10s grace period for reconnects) ──
+82   socket.on('disconnect', () => {
+83     const timer = setTimeout(() => {
+84       _disconnectTimers.delete(userId);
+85       _setOffline(userId, socket);
+86     }, DISCONNECT_GRACE_MS);
+87     _disconnectTimers.set(userId, timer);
+88   });
+89 
+90   // Cancel pending offline timer if captain reconnects
+91   if (_disconnectTimers.has(userId)) {
+92     clearTimeout(_disconnectTimers.get(userId));
+93     _disconnectTimers.delete(userId);
+94     logger.info(`[Captain Socket] ${userId} reconnected — cancelled offline timer`);
+95   }
+96 };
+97 
+98 // ── Private ──────────────────────────────────────────────────────────
+99 async function _setOffline(userId, socket) {
+100   try {
+101     const captain = await captainRepo.findByUserId(userId);
+102     if (!captain || !captain.isOnline) return;
+103 
+104     // Guard against duplicate-socket race: a newer socket may have taken over
+105     if (captain.socketId && captain.socketId !== socket.id) return;
+106 
+107     captain.isOnline = false;
+108     captain.socketId = null;
+109     captain.lastActiveAt = new Date();
+110     await captainRepo.saveDoc(captain);
+111 
+112     // Use socket.to instead of emitToPassengers so the emitter excludes itself
+113     socket.to('passengers').emit('captain:disappear', { captainId: captain._id.toString() });
+114     logger.info(`[Captain Socket] ${userId} went offline`);
+115   } catch (err) {
+116     logger.error('[Captain Socket] _setOffline error', err);
+117   }
+118 }
+119 
+120 function _formatAppear(captain) {
+121   return {
+122     captainId: captain._id.toString(),
+123     name: captain.userId?.name,
+124     avatar: captain.userId?.avatar,
+125     vehicleType: captain.vehicleType,
+126     vehicleColor: captain.vehicleColor,
+127     lat: captain.location?.coordinates?.[1] ?? 0,
+128     lng: captain.location?.coordinates?.[0] ?? 0,
+129     heading: captain.heading ?? 0,
+130     rating: captain.rating ?? 0,
+131   };
+132 }
+133 
+134 module.exports = { register };
 ```
 
 ## File: `src\modules\fare\fare.controller.js`
@@ -4582,11 +4957,11 @@
 2 const env = require('../config/env');
 3 const { verifyAccessToken } = require('../utils/jwt.util');
 4 const logger = require('../config/logger');
-5 
-6 let io;
-7 
-8 // In-memory presence map: userId → Set<socketId>
-9 // Replace with Redis adapter for horizontal scaling
+5 const { simpleSocketLogger } = require('../middlewares/socketLogger.middleware');
+6 
+7 let io;
+8 
+9 // In-memory presence map: userId → Set<socketId>
 10 const _presence = new Map();
 11 
 12 const _addPresence = (userId, socketId) => {
@@ -4601,87 +4976,165 @@
 21   if (sockets.size === 0) _presence.delete(userId);
 22 };
 23 
-24 const initSocket = (server) => {
-25   io = new Server(server, {
-26     cors: {
-27       origin: env.SOCKET_CORS_ORIGIN || '*',
-28       methods: ['GET', 'POST'],
-29       credentials: true,
-30     },
-31   });
-32 
-33   // JWT auth middleware — runs before every connection
-34   io.use((socket, next) => {
-35     const authHeader = socket.handshake.headers.authorization;
-36     if (!authHeader?.startsWith('Bearer ')) {
-37       return next(new Error('UNAUTHORIZED'));
-38     }
-39     const token = authHeader.split(' ')[1];
-40     const decoded = verifyAccessToken(token);
-41     if (!decoded) {
-42       return next(new Error('INVALID_TOKEN'));
-43     }
-44     socket.data.userId = decoded.id.toString();
-45     socket.data.role = decoded.role;
-46     next();
-47   });
+24 // تسجيل جميع الأحداث على مستوى الـ socket
+25 const wrapSocketWithLogging = (socket) => {
+26   const userId = socket.data.userId;
+27   const socketId = socket.id;
+28 
+29   // تسجيل الاتصال
+30   simpleSocketLogger.logConnection(socketId, userId);
+31 
+32   // حفظ الـ emit الأصلي
+33   const originalEmit = socket.emit;
+34   socket.emit = function (event, ...args) {
+35     simpleSocketLogger.logOutgoing(socketId, userId, event, args[0]);
+36     return originalEmit.apply(this, [event, ...args]);
+37   };
+38 
+39   // مراقبة الأحداث المعروفة مسبقاً
+40   const originalOn = socket.on;
+41   socket.on = function (event, listener) {
+42     const wrappedListener = (...args) => {
+43       simpleSocketLogger.logIncoming(socketId, userId, event, args[0]);
+44       return listener.apply(this, args);
+45     };
+46     return originalOn.call(this, event, wrappedListener);
+47   };
 48 
-49   io.on('connection', (socket) => {
-50     const { userId, role } = socket.data;
-51     logger.info(`[Socket] connected ${socket.id} | user=${userId} | role=${role}`);
-52 
-53     // Track presence
-54     _addPresence(userId, socket.id);
+49   // مراقبة قطع الاتصال
+50   const originalDisconnect = socket.disconnect;
+51   socket.disconnect = function (...args) {
+52     simpleSocketLogger.logDisconnection(socketId, userId, 'manual disconnect');
+53     return originalDisconnect.apply(this, args);
+54   };
 55 
-56     // Personal room — enables targeted messages to any user
-57     socket.join(`user:${userId}`);
+56   return socket;
+57 };
 58 
-59     // Role rooms
-60     if (role === 'passenger') socket.join('passengers');
-61 
-62     // Register per-module handlers (lazy require avoids circular deps at load time)
-63     require('../modules/captain/captain.socket').register(io, socket);
-64     require('../modules/trip/trip.socket').register(io, socket);
-65 
-66     socket.on('disconnect', (reason) => {
-67       _removePresence(userId, socket.id);
-68       logger.info(`[Socket] disconnected ${socket.id} | user=${userId} | reason=${reason}`);
-69     });
-70   });
-71 
-72   return io;
-73 };
-74 
-75 const getIo = () => {
-76   if (!io) throw new Error('Socket.IO not initialized');
-77   return io;
-78 };
-79 
-80 // Emit to a specific user's personal room
-81 const emitToUser = (userId, event, data) => {
-82   if (!io) return;
-83   io.to(`user:${userId}`).emit(event, data);
-84 };
-85 
-86 // Emit to all sockets inside a trip room
-87 const emitToTrip = (tripId, event, data) => {
-88   if (!io) return;
-89   io.to(`trip:${tripId}`).emit(event, data);
-90 };
+59 const initSocket = (server) => {
+60   io = new Server(server, {
+61     cors: {
+62       origin: env.SOCKET_CORS_ORIGIN || '*',
+63       methods: ['GET', 'POST'],
+64       credentials: true,
+65     },
+66   });
+67 
+68   // JWT auth middleware
+69   io.use((socket, next) => {
+70     const authHeader = socket.handshake.headers.authorization;
+71     if (!authHeader?.startsWith('Bearer ')) {
+72       logger.warn(`[Socket] Socket ${socket.id} - No token provided`);
+73       return next(new Error('UNAUTHORIZED'));
+74     }
+75     const token = authHeader.split(' ')[1];
+76     const decoded = verifyAccessToken(token);
+77     if (!decoded) {
+78       logger.warn(`[Socket] Socket ${socket.id} - Invalid token`);
+79       return next(new Error('INVALID_TOKEN'));
+80     }
+81     socket.data.userId = decoded.id.toString();
+82     socket.data.role = decoded.role;
+83 
+84     logger.info(`[Socket Auth] Socket ${socket.id} authenticated as user ${decoded.id} (${decoded.role})`);
+85     next();
+86   });
+87 
+88   io.on('connection', (rawSocket) => {
+89     // تغليف السوكيت بالتسجيل
+90     const socket = wrapSocketWithLogging(rawSocket);
 91 
-92 // Emit to all online passengers
-93 const emitToPassengers = (event, data) => {
-94   if (!io) return;
-95   io.to('passengers').emit(event, data);
-96 };
+92     const { userId, role } = socket.data;
+93     console.log(`✅ [Socket CONNECTED] ${socket.id} | user=${userId} | role=${role}`);
+94 
+95     // Track presence
+96     _addPresence(userId, socket.id);
 97 
-98 // Check if a user has at least one active socket connection
-99 const isUserOnline = (userId) => _presence.has(userId.toString());
+98     // Personal room
+99     socket.join(`user:${userId}`);
 100 
-101 // Get all currently online userIds
-102 const getOnlineUserIds = () => Array.from(_presence.keys());
-103 
-104 module.exports = { initSocket, getIo, emitToUser, emitToTrip, emitToPassengers, isUserOnline, getOnlineUserIds };
+101     // Role rooms
+102     if (role === 'passenger') {
+103       socket.join('passengers');
+104       console.log(`👤 [PASSENGER JOINED] socket:${socket.id} | user:${userId}`);
+105       console.log(`📊 [PASSENGER COUNT] Now ${io.sockets.adapter.rooms.get('passengers')?.size || 0} passengers online`);
+106     }
+107 
+108     // تسجيل الدخول إلى الغرف
+109     console.log(`📌 [Socket ROOMS] ${socket.id} joined rooms: user:${userId}${role === 'passenger' ? ', passengers' : ''}`);
+110 
+111     // Register per-module handlers
+112     require('../modules/captain/captain.socket').register(io, socket);
+113     require('../modules/trip/trip.socket').register(io, socket);
+114 
+115     socket.on('disconnect', (reason) => {
+116       _removePresence(userId, socket.id);
+117       simpleSocketLogger.logDisconnection(socket.id, userId, reason);
+118       console.log(`❌ [Socket DISCONNECTED] ${socket.id} | user=${userId} | reason=${reason}`);
+119     });
+120 
+121     socket.on('error', (err) => {
+122       console.error(`⚠️ [Socket ERROR] ${socket.id} | user=${userId} | error:`, err.message);
+123     });
+124   });
+125 
+126   // مراقبة أحداث الـ io العامة
+127   io.of('/').adapter.on('create-room', (room) => {
+128     console.log(`🏠 [Socket ROOM CREATE] room: ${room}`);
+129   });
+130 
+131   io.of('/').adapter.on('join-room', (room, id) => {
+132     console.log(`🚪 [Socket ROOM JOIN] socket: ${id} joined room: ${room}`);
+133   });
+134 
+135   io.of('/').adapter.on('leave-room', (room, id) => {
+136     console.log(`🚪 [Socket ROOM LEAVE] socket: ${id} left room: ${room}`);
+137   });
+138 
+139   return io;
+140 };
+141 
+142 const getIo = () => {
+143   if (!io) throw new Error('Socket.IO not initialized');
+144   return io;
+145 };
+146 
+147 // Emit to a specific user's personal room
+148 const emitToUser = (userId, event, data) => {
+149   if (!io) return;
+150   console.log(`📤 [EMIT TO USER] user:${userId} | event:${event} | data:`, data ? JSON.stringify(data).slice(0, 200) : 'null');
+151   io.to(`user:${userId}`).emit(event, data);
+152 };
+153 
+154 // Emit to all sockets inside a trip room
+155 const emitToTrip = (tripId, event, data) => {
+156   if (!io) return;
+157   console.log(`📤 [EMIT TO TRIP] trip:${tripId} | event:${event}`);
+158   io.to(`trip:${tripId}`).emit(event, data);
+159 };
+160 
+161 // Emit to all online passengers
+162 const emitToPassengers = (event, data) => {
+163   if (!io) return;
+164   console.log(`📤 [EMIT TO PASSENGERS] event:${event}`);
+165   io.to('passengers').emit(event, data);
+166 };
+167 
+168 // Check if a user has at least one active socket connection
+169 const isUserOnline = (userId) => _presence.has(userId.toString());
+170 
+171 // Get all currently online userIds
+172 const getOnlineUserIds = () => Array.from(_presence.keys());
+173 
+174 module.exports = {
+175   initSocket,
+176   getIo,
+177   emitToUser,
+178   emitToTrip,
+179   emitToPassengers,
+180   isUserOnline,
+181   getOnlineUserIds
+182 };
 ```
 
 ## File: `src\utils\api-cache.util.js`

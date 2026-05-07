@@ -14,8 +14,7 @@ const register = (io, socket) => {
 
   // ── Go online ────────────────────────────────────────────────────
   socket.on('captain:go:online', async () => {
-    console.log('🟡 [SERVER] captain:go:online received for userId:', userId);
-    try {
+     try {
       const captain = await captainRepo.findByUserIdPopulated(userId);
       if (!captain || captain.status !== 'approved') {
         return socket.emit('error', { code: 'NOT_APPROVED', message: 'Captain not approved' });
@@ -33,8 +32,6 @@ const register = (io, socket) => {
 
       // Cache Captain._id on socket for fast access in location updates
       socket.data.captainId = captain._id.toString();
-      console.log('🟡 [SERVER] Captain status after approve:', captain.status);
-      console.log('🟡 [SERVER] Emitting captain:appear to passengers');
       emitToPassengers('captain:appear', _formatAppear(captain));
       socket.emit('captain:online:ack', { isOnline: true });
 
@@ -83,7 +80,6 @@ const register = (io, socket) => {
 
   // ── Auto-offline on disconnect (with 10s grace period for reconnects) ──
   socket.on('disconnect', () => {
-    console.log('🟡 [SERVER] Socket disconnected for userId:', userId);
     const timer = setTimeout(() => {
       _disconnectTimers.delete(userId);
       _setOffline(userId, socket);
@@ -101,7 +97,6 @@ const register = (io, socket) => {
 
 // ── Private ──────────────────────────────────────────────────────────
 async function _setOffline(userId, socket) {
-  console.log('🟡 [SERVER] captain:go:offline received for userId:', userId);
   try {
     const captain = await captainRepo.findByUserId(userId);
     if (!captain || !captain.isOnline) return;
