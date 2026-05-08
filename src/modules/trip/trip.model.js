@@ -1,16 +1,39 @@
 const mongoose = require('mongoose');
 
-const VALID_STATUSES = ['searching', 'accepted', 'onTheWay', 'arrived', 'started', 'ended', 'cancelled'];
+const VALID_STATUSES = [
+  'searching',
+  'pending_captain',
+  'accepted',
+  'on_the_way',
+  'onTheWay',          // legacy alias — kept for backward compatibility
+  'arrived',
+  'started',
+  'in_progress',
+  'completed',
+  'ended',             // legacy alias — kept for backward compatibility
+  'cancelled_by_passenger',
+  'cancelled_by_captain',
+  'cancelled_by_system',
+  'cancelled',         // legacy alias — kept for backward compatibility
+  'no_captain_found',
+];
 
-// Defines which transitions are legal
 const TRANSITIONS = {
-  searching: ['accepted', 'cancelled'],
-  accepted:  ['onTheWay', 'cancelled'],
-  onTheWay:  ['arrived', 'cancelled'],
-  arrived:   ['started', 'cancelled'],
-  started:   ['ended', 'cancelled'],
-  ended:     [],
-  cancelled: [],
+  searching:              ['accepted', 'pending_captain', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain', 'cancelled_by_system', 'no_captain_found'],
+  pending_captain:        ['accepted', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain', 'cancelled_by_system', 'no_captain_found'],
+  accepted:               ['on_the_way', 'onTheWay', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain'],
+  on_the_way:             ['arrived', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain'],
+  onTheWay:               ['arrived', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain'],
+  arrived:                ['started', 'in_progress', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain'],
+  started:                ['completed', 'ended', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain'],
+  in_progress:            ['completed', 'ended', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain'],
+  completed:              [],
+  ended:                  [],
+  cancelled:              [],
+  cancelled_by_passenger: [],
+  cancelled_by_captain:   [],
+  cancelled_by_system:    [],
+  no_captain_found:       [],
 };
 
 const tripSchema = new mongoose.Schema(
@@ -23,6 +46,8 @@ const tripSchema = new mongoose.Schema(
       enum: VALID_STATUSES,
       default: 'searching',
     },
+
+    // ── Locations ──────────────────────────────────────────────────────
     startLocation: {
       lat:     { type: Number, required: true },
       lng:     { type: Number, required: true },
@@ -33,36 +58,83 @@ const tripSchema = new mongoose.Schema(
       lng:     Number,
       address: String,
     },
-    distanceKm:   { type: Number, default: 0 },
-    totalFare:    { type: Number, default: 0 },
-    fareBreakdown: {
-      firstKm:   Number,
-      firstFare: Number,
-      extraKm:   Number,
-      extraFare: Number,
-      total:     Number,
+    pickupLocation: {
+      lat:       { type: Number },
+      lng:       { type: Number },
+      address:   { type: String, default: '' },
+      arrivedAt: { type: Date },
     },
-    cancellationReason: String,
-    cancelledBy: { type: String, enum: ['passenger', 'captain'] },
+    dropoffLocation: {
+      lat:       { type: Number },
+      lng:       { type: Number },
+      address:   { type: String, default: '' },
+      arrivedAt: { type: Date },
+    },
 
-    // Ratings
-    passengerRating: { type: Number, min: 1, max: 5 },
+    // ── Live location snapshots ─────────────────────────────────────────
+    captainLastLocation: {
+      lat:       { type: Number, default: null },
+      lng:       { type: Number, default: null },
+      heading:   { type: Number, default: 0 },
+      speed:     { type: Number, default: 0 },
+      updatedAt: { type: Date, default: null },
+    },
+    passengerLastLocation: {
+      lat:       { type: Number, default: null },
+      lng:       { type: Number, default: null },
+      updatedAt: { type: Date, default: null },
+    },
+
+    // ── Polylines ───────────────────────────────────────────────────────
+    polyRoute:                    { type: String, default: '' },  // legacy field — kept for compatibility
+    pickupToDestinationPolyline:  { type: String, default: '' },  // full passenger route
+    captainToPickupPolyline:      { type: String, default: '' },  // captain→pickup route
+    currentPolyline:              { type: String, default: '' },  // active display polyline
+
+    // ── Fare & distance ─────────────────────────────────────────────────
+    distanceKm:     { type: Number, default: 0 },
+    totalFare:      { type: Number, default: 0 },
+    firstKmFare:    { type: Number },
+    extraKmFare:    { type: Number },
+    routeDistanceKm: { type: Number, default: 0 },
+    gpsDistanceKm:   { type: Number, default: 0 },
+
+    // ── Trip stats ──────────────────────────────────────────────────────
+    estimatedDurationMins: { type: Number, default: 0 },
+    waitingTimeSeconds:    { type: Number, default: 0 },
+    travelTimeSeconds:     { type: Number, default: 0 },
+
+    // ── Cancellation ────────────────────────────────────────────────────
+    cancellationReason: { type: String, default: null },
+    cancelledAt:        { type: Date },
+    cancelledBy:        { type: String, enum: ['passenger', 'captain', 'system'] },
+
+    // ── Ratings ─────────────────────────────────────────────────────────
+    passengerRating:     { type: Number, min: 1, max: 5 },
     passengerRatingTags: [String],
-    captainRating: { type: Number, min: 1, max: 5 },
-    captainRatingTags: [String],
+    captainRating:       { type: Number, min: 1, max: 5 },
+    captainRatingTags:   [String],
 
-    // State-change timestamps (one per transition)
+    // ── State-change timestamps ─────────────────────────────────────────
+    searchStartedAt:    { type: Date },
+    captainNotifiedAt:  { type: Date },
+    captainRespondedAt: { type: Date },
+    captainAcceptedAt:  { type: Date },
+    captainOnTheWayAt:  { type: Date },
+    captainArrivedAt:   { type: Date },
+    tripStartedAt:      { type: Date },
+    tripEndedAt:        { type: Date },
+
+    // Legacy timestamp aliases
     acceptedAt:  Date,
     onTheWayAt:  Date,
     arrivedAt:   Date,
     startedAt:   Date,
     endedAt:     Date,
-    cancelledAt: Date,
   },
   { timestamps: true }
 );
 
-// Guard method used in trip.service to prevent illegal transitions
 tripSchema.methods.canTransitionTo = function (newStatus) {
   return (TRANSITIONS[this.status] ?? []).includes(newStatus);
 };

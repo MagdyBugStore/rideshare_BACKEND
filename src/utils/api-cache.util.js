@@ -20,8 +20,8 @@ class LruCache {
    */
   constructor({ maxSize = 1000, ttlMs }) {
     this._maxSize = maxSize;
-    this._ttlMs   = ttlMs;
-    this._map     = new Map(); // insertion-order Map → oldest entry is first
+    this._ttlMs = ttlMs;
+    this._map = new Map(); // insertion-order Map → oldest entry is first
   }
 
   /** Returns the cached value, or undefined on miss / expiry. */
@@ -58,9 +58,9 @@ class LruCache {
 
 // ── Key normalisation helpers ─────────────────────────────────────────────────
 
-const _MIN  = 60_000;
+const _MIN = 60_000;
 const _HOUR = 60 * _MIN;
-const _DAY  = 24 * _HOUR;
+const _DAY = 24 * _HOUR;
 
 /**
  * Normalise a free-text search query so that minor variations map to the
@@ -102,19 +102,34 @@ function snapLatLng(lat, lng, precision = 4) {
 // ── Pre-configured cache instances ────────────────────────────────────────────
 
 /** Autocomplete suggestions — moderate TTL, coarse location grid */
-const autocompleteCache = new LruCache({ maxSize: 2000,  ttlMs: 24 * _HOUR });
+const autocompleteCache = new LruCache({ maxSize: 2000, ttlMs: 999 * _DAY });
 
 /** Place details by place_id — very stable data, long TTL */
-const placeDetailsCache = new LruCache({ maxSize: 2000, ttlMs: 24 * _HOUR });
+const placeDetailsCache = new LruCache({ maxSize: 2000, ttlMs: 999 * _DAY });
 
 /** Nearby search results — location-sensitive, short TTL */
-const nearbyCache       = new LruCache({ maxSize: 300,  ttlMs: 10 * _MIN });
+const nearbyCache = new LruCache({ maxSize: 300, ttlMs: 999 * _DAY });
 
 /** Reverse geocode — stable results, long TTL, fine grid */
-const reverseCache      = new LruCache({ maxSize: 2000, ttlMs: 24 * _HOUR });
+const reverseCache = new LruCache({ maxSize: 2000, ttlMs: 999 * _DAY });
 
 /** Route polylines — semi-stable, medium TTL */
-const polylineCache     = new LruCache({ maxSize: 500,  ttlMs: 10 * _MIN });
+const polylineCache = new LruCache({ maxSize: 500, ttlMs: 999 * _DAY });
+
+// /** Autocomplete suggestions — moderate TTL, coarse location grid */
+// const autocompleteCache = new LruCache({ maxSize: 2000,  ttlMs: 24 * _HOUR });
+
+// /** Place details by place_id — very stable data, long TTL */
+// const placeDetailsCache = new LruCache({ maxSize: 2000, ttlMs: 24 * _HOUR });
+
+// /** Nearby search results — location-sensitive, short TTL */
+// const nearbyCache       = new LruCache({ maxSize: 300,  ttlMs: 10 * _MIN });
+
+// /** Reverse geocode — stable results, long TTL, fine grid */
+// const reverseCache      = new LruCache({ maxSize: 2000, ttlMs: 24 * _HOUR });
+
+// /** Route polylines — semi-stable, medium TTL */
+// const polylineCache     = new LruCache({ maxSize: 500,  ttlMs: 10 * _MIN });
 
 // ── Key builders ──────────────────────────────────────────────────────────────
 

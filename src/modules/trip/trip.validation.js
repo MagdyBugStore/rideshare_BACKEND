@@ -10,6 +10,7 @@ const locationSchema = Joi.object({
 
 const searchTripSchema = Joi.object({
   startLocation: locationSchema.required(),
+  endLocation:   locationSchema.optional(),
   carType:       Joi.string().valid(...CAR_TYPES).required(),
 });
 
@@ -17,10 +18,11 @@ const createTripSchema = Joi.object({
   captainId:     Joi.string().hex().length(24).required(),
   carType:       Joi.string().valid(...CAR_TYPES).optional(),
   startLocation: locationSchema.required(),
+  endLocation:   locationSchema.optional(),
 });
 
 const endTripSchema = Joi.object({
-  distanceKm: Joi.number().min(0).required(),
+  distanceKm: Joi.number().min(0).optional(),
 });
 
 const cancelTripSchema = Joi.object({

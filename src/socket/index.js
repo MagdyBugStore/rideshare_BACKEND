@@ -68,7 +68,6 @@ const initSocket = (server) => {
   io.use((socket, next) => {
     const authHeader = socket.handshake.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      logger.warn(`[Socket] Socket ${socket.id} - No token provided`);
       return next(new Error('UNAUTHORIZED'));
     }
     const token = authHeader.split(' ')[1];
@@ -80,7 +79,6 @@ const initSocket = (server) => {
     socket.data.userId = decoded.id.toString();
     socket.data.role = decoded.role;
 
-    logger.info(`[Socket Auth] Socket ${socket.id} authenticated as user ${decoded.id} (${decoded.role})`);
     next();
   });
 
@@ -96,11 +94,7 @@ const initSocket = (server) => {
 
     if (role === 'passenger') {
       socket.join('passengers');
-      console.log(`👤 [PASSENGER JOINED] socket:${socket.id} | user:${userId}`);
-      console.log(`📊 [PASSENGER COUNT] Now ${io.sockets.adapter.rooms.get('passengers')?.size || 0} passengers online`);
     }
-
-    console.log(`📌 [Socket ROOMS] ${socket.id} joined rooms: user:${userId}${role === 'passenger' ? ', passengers' : ''}`);
 
     require('../modules/captain/captain.socket').register(io, socket);
     require('../modules/trip/trip.socket').register(io, socket);

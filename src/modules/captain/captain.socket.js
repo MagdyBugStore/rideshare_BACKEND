@@ -3,12 +3,17 @@
 const captainRepo = require('./captain.repository');
 const logger = require('../../config/logger');
 const { emitToPassengers } = require('../../socket');
+const { haversineDistance } = require('../../utils/distance.util');
+const tripService = require('../trip/trip.service');
 
-const BROADCAST_RADIUS_KM = 10;
 const LOCATION_THROTTLE_MS = 3000;
 const DISCONNECT_GRACE_MS = 10000;
+const ROUTE_REFRESH_THRESHOLD_KM = 0.3;
+const TRIP_LOCATION_THROTTLE_MS = 3000; // throttle trip captainLastLocation DB writes
 const _lastDbWrite = new Map();
+const _lastTripWrite = new Map();
 const _disconnectTimers = new Map();
+const _lastRouteCalc = new Map(); // userId → { lat, lng }
 
 const register = (io, socket) => {
   if (socket.data.role !== 'captain') return;
@@ -46,12 +51,37 @@ const register = (io, socket) => {
 
   socket.on('captain:location:update', async ({ lat, lng, heading = 0 }) => {
     if (lat == null || lng == null) return;
-    
+
     const cId = socket.data.captainId || captainId;
     console.log(`📍 [CAPTAIN MOVING] captainId: ${cId} | lat: ${lat}, lng: ${lng}`);
     if (!cId) return;
 
     captainLocation = { lat, lng };
+
+    // Forward location to the active trip room so the passenger's map updates in real-time.
+    const activeTripId = socket.data.activeTripId;
+    if (activeTripId) {
+      io.to(`trip:${activeTripId}`).emit('trip:location:update', { lat, lng, heading });
+
+      // Refresh the captain→pickup polyline every ~300 m so both screens show an updated route.
+      const lastCalc = _lastRouteCalc.get(userId);
+      const movedKm = lastCalc ? haversineDistance(lat, lng, lastCalc.lat, lastCalc.lng) : Infinity;
+      if (movedKm >= ROUTE_REFRESH_THRESHOLD_KM) {
+        _lastRouteCalc.set(userId, { lat, lng });
+        tripService.refreshRoute(activeTripId, lat, lng).catch((err) =>
+          logger.warn('[Captain Socket] route refresh failed:', err.message)
+        );
+      }
+
+      // Persist captainLastLocation to the trip document (throttled)
+      const tripNow = Date.now();
+      if (tripNow - (_lastTripWrite.get(activeTripId) ?? 0) >= TRIP_LOCATION_THROTTLE_MS) {
+        _lastTripWrite.set(activeTripId, tripNow);
+        tripService.updateCaptainLocation(activeTripId, lat, lng, heading).catch((err) =>
+          logger.warn('[Captain Socket] captainLastLocation update failed:', err.message)
+        );
+      }
+    }
 
     // ✅ بث تحديث الموقع فقط للركاب القريبين
     _emitToNearbyPassengers(io, captainLocation, 'captain:move', {
@@ -80,6 +110,7 @@ const register = (io, socket) => {
   // ── Auto-offline on disconnect ──────────────────────────────────────────
   socket.on('disconnect', () => {
     logger.info(`[Captain Socket] disconnect event fired for ${userId}`);
+    _lastRouteCalc.delete(userId);
 
     const timer = setTimeout(() => {
       _disconnectTimers.delete(userId);

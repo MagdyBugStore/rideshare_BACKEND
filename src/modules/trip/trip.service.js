@@ -1,15 +1,22 @@
 const tripRepo = require('./trip.repository');
 const captainRepo = require('../captain/captain.repository');
 const userRepo = require('../user/user.repository');
-const { calcFareBreakdown } = require('../../utils/fare.util');
+const { calcFareBreakdown, getFareConfig } = require('../../utils/fare.util');
+const { getPolyline } = require('../routes/routes.service');
 const { haversineDistance } = require('../../utils/distance.util');
 const { emitToUser, emitToTrip } = require('../../socket');
 const notificationService = require('../notification/notification.service');
 const logger = require('../../config/logger');
 
-const ACTIVE_STATUSES = ['searching', 'accepted', 'onTheWay', 'arrived', 'started'];
+const ACTIVE_STATUSES = [
+  'searching', 'pending_captain',
+  'accepted',
+  'on_the_way', 'onTheWay',
+  'arrived',
+  'started', 'in_progress',
+];
 
-const DISPATCH_TIMEOUT_MS = 15000; // 15s per captain
+const DISPATCH_TIMEOUT_MS = 120000; // 2 minutes per captain
 const MAX_DISPATCH_ATTEMPTS = 5;   // max captains before giving up
 const EXPAND_RADIUS_KM = 10;       // expanded radius after initial failure
 
@@ -18,15 +25,84 @@ const EXPAND_RADIUS_KM = 10;       // expanded radius after initial failure
 const _pending = new Map();
 
 // ── Passenger: initiate trip search (dispatch loop) ──────────────────
-const searchTrip = async (passengerId, startLocation, carType) => {
+const searchTrip = async (passengerId, startLocation, endLocation, carType) => {
+  // Idempotency: never create a duplicate active trip for the same passenger.
+  // If one already exists, return it so the client can join its room.
+  const existing = await tripRepo.findOne({ passengerId, status: { $in: ACTIVE_STATUSES } });
+  if (existing) {
+    logger.warn(`[searchTrip] Passenger ${passengerId} already has active trip ${existing._id} — returning existing`);
+    return existing;
+  }
+
+  // Retry path: reuse the most recent no_captain_found trip instead of creating a new document.
+  // This keeps a single trip document per passenger journey across retries.
+  const failedTrip = await tripRepo.findOne(
+    { passengerId, status: 'no_captain_found' },
+    { sort: { createdAt: -1 } }
+  );
+  if (failedTrip) {
+    logger.info(`[searchTrip] Retrying dispatch on existing trip ${failedTrip._id} for passenger ${passengerId}`);
+    failedTrip.status = 'searching';
+    failedTrip.searchStartedAt = new Date();
+    failedTrip.cancellationReason = undefined;
+    failedTrip.cancelledBy = undefined;
+    failedTrip.cancelledAt = undefined;
+    await tripRepo.saveDoc(failedTrip);
+
+    const passenger = await userRepo.findById(passengerId);
+    const captains = await captainRepo.findNearby(startLocation.lng, startLocation.lat, 5, carType);
+    _dispatchLoop(failedTrip, captains, passenger).catch((err) =>
+      logger.error('[Trip Dispatch] unhandled error on retry', err)
+    );
+    return failedTrip;
+  }
+
   const passenger = await userRepo.findById(passengerId);
-  const trip = await tripRepo.create({ passengerId, carType, startLocation, status: 'searching' });
+  const { firstKmFare, extraKmFare } = getFareConfig(carType);
+
+  let polyRoute = '';
+  let distanceKm = 0;
+  let totalFare = 0;
+  let routeDistanceKm = 0;
+  let estimatedDurationMins = 0;
+
+  if (endLocation?.lat && endLocation?.lng) {
+    try {
+      const route = await getPolyline(startLocation.lat, startLocation.lng, endLocation.lat, endLocation.lng);
+      polyRoute = route.encodedPolyline;
+      distanceKm = route.distanceKm;
+      routeDistanceKm = route.distanceKm;
+      estimatedDurationMins = route.durationMins ?? 0;
+      totalFare = calcFareBreakdown(distanceKm, carType).total;
+    } catch (err) {
+      logger.warn('[searchTrip] Route polyline failed:', err.message);
+    }
+  }
+
+  const trip = await tripRepo.create({
+    passengerId, carType,
+    startLocation,
+    endLocation: endLocation || undefined,
+    pickupLocation: {
+      lat: startLocation.lat,
+      lng: startLocation.lng,
+      address: startLocation.address || '',
+    },
+    dropoffLocation: endLocation?.lat ? {
+      lat: endLocation.lat,
+      lng: endLocation.lng,
+      address: endLocation.address || '',
+    } : undefined,
+    status: 'searching',
+    searchStartedAt: new Date(),
+    polyRoute,
+    pickupToDestinationPolyline: polyRoute,
+    currentPolyline: polyRoute,
+    distanceKm, totalFare, firstKmFare, extraKmFare, routeDistanceKm,
+    estimatedDurationMins,
+  });
 
   const captains = await captainRepo.findNearby(startLocation.lng, startLocation.lat, 5, carType);
-  
-  if (captains.length === 0) {
-    const expandedCaptains = await captainRepo.findNearby(startLocation.lng, startLocation.lat, 10, carType);
-  }
 
   _dispatchLoop(trip, captains, passenger).catch((err) =>
     logger.error('[Trip Dispatch] unhandled error', err)
@@ -56,15 +132,24 @@ async function _dispatchLoop(trip, captains, passenger) {
 
     console.log(`🔄 [DISPATCH] Sending request to captain ${captainUserId}`);
 
+    const routeDist = trip.routeDistanceKm || trip.distanceKm || 0;
     emitToUser(captainUserId, 'trip:request:incoming', {
       tripId: trip._id.toString(),
       passenger: {
         id: passenger._id.toString(),
         name: passenger.name,
-        avatar: passenger.avatar
+        avatar: passenger.avatar,
+        phone: passenger.phone,
       },
       startLocation: trip.startLocation,
+      endLocation: trip.endLocation,
       carType: trip.carType,
+      polyRoute: trip.polyRoute,
+      distanceKm: routeDist,       // pickup→destination route distance
+      routeDistanceKm: routeDist,
+      totalFare: trip.totalFare,
+      firstKmFare: trip.firstKmFare,
+      extraKmFare: trip.extraKmFare,
     });
 
     notificationService.notify(captainUserId, {
@@ -86,29 +171,41 @@ async function _dispatchLoop(trip, captains, passenger) {
       continue;
     }
 
+    // Record when captain responded (accepted)
+    tripRepo.findByIdAndUpdate(trip._id, { $set: { captainRespondedAt: new Date() } }).catch(() => {});
+
     await captainRepo.updateByUserId(captainUserId, { isOnTrip: true });
-    const populated = await captainRepo.findByUserIdPopulated(captainUserId);
+
+    const captainPayload = {
+      captainId: captain._id.toString(),
+      name: captain.userId?.name,
+      avatar: captain.userId?.avatar,
+      phone: captain.userId?.phone,
+      vehicleType: captain.vehicleType,
+      vehicleModel: captain.vehicleModel,
+      vehicleColor: captain.vehicleColor,
+      plateNumber: captain.plateNumber,
+      rating: captain.rating ?? 0,
+    };
 
     emitToUser(passenger._id.toString(), 'trip:accepted', {
       tripId: trip._id.toString(),
-      captain: {
-        captainId: captain._id.toString(),
-        name: captain.userId?.name,
-        avatar: captain.userId?.avatar,
-        phone: captain.userId?.phone,
-        vehicleType: captain.vehicleType,
-        vehicleModel: captain.vehicleModel,
-        vehicleColor: captain.vehicleColor,
-        plateNumber: captain.plateNumber,
-        rating: captain.rating ?? 0,
-      },
+      captain: captainPayload,
     });
+
+    // Notify captain so their IncomingRequestScreen can transition to NavigationToPickupScreen
+    emitToUser(captainUserId, 'trip:accepted', { tripId: trip._id.toString(), captain: null });
 
     notificationService.notify(passenger._id, {
       title: 'تم قبول رحلتك ✓',
       body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
       data: { type: 'trip:accepted', tripId: trip._id.toString() },
     }).catch(() => { });
+
+    // Compute and broadcast initial captain→pickup route asynchronously
+    _emitInitialRoute(trip._id.toString(), captain, trip.startLocation).catch((err) =>
+      logger.warn('[dispatch] Initial route failed:', err.message)
+    );
 
     console.log(`🔄 [DISPATCH] ✅ Trip ${trip._id} accepted by captain ${captainUserId}`);
     return;
@@ -134,15 +231,24 @@ async function _dispatchLoop(trip, captains, passenger) {
 
     console.log(`🔄 [DISPATCH] Sending request (expanded) to captain ${captainUserId}`);
 
+    const routeDistExp = trip.routeDistanceKm || trip.distanceKm || 0;
     emitToUser(captainUserId, 'trip:request:incoming', {
       tripId: trip._id.toString(),
       passenger: {
         id: passenger._id.toString(),
         name: passenger.name,
-        avatar: passenger.avatar
+        avatar: passenger.avatar,
+        phone: passenger.phone,
       },
       startLocation: trip.startLocation,
+      endLocation: trip.endLocation,
       carType: trip.carType,
+      polyRoute: trip.polyRoute,
+      distanceKm: routeDistExp,       // pickup→destination route distance
+      routeDistanceKm: routeDistExp,
+      totalFare: trip.totalFare,
+      firstKmFare: trip.firstKmFare,
+      extraKmFare: trip.extraKmFare,
     });
 
     notificationService.notify(captainUserId, {
@@ -157,28 +263,40 @@ async function _dispatchLoop(trip, captains, passenger) {
     const locked = await tripRepo.atomicAccept(trip._id, captain._id);
     if (!locked) continue;
 
+    tripRepo.findByIdAndUpdate(trip._id, { $set: { captainRespondedAt: new Date() } }).catch(() => {});
+
     await captainRepo.updateByUserId(captainUserId, { isOnTrip: true });
+
+    const captainPayloadExpanded = {
+      captainId: captain._id.toString(),
+      name: captain.userId?.name,
+      avatar: captain.userId?.avatar,
+      phone: captain.userId?.phone,
+      vehicleType: captain.vehicleType,
+      vehicleModel: captain.vehicleModel,
+      vehicleColor: captain.vehicleColor,
+      plateNumber: captain.plateNumber,
+      rating: captain.rating ?? 0,
+    };
 
     emitToUser(passenger._id.toString(), 'trip:accepted', {
       tripId: trip._id.toString(),
-      captain: {
-        captainId: captain._id.toString(),
-        name: captain.userId?.name,
-        avatar: captain.userId?.avatar,
-        phone: captain.userId?.phone,
-        vehicleType: captain.vehicleType,
-        vehicleModel: captain.vehicleModel,
-        vehicleColor: captain.vehicleColor,
-        plateNumber: captain.plateNumber,
-        rating: captain.rating ?? 0,
-      },
+      captain: captainPayloadExpanded,
     });
+
+    // Notify captain so their IncomingRequestScreen can transition to NavigationToPickupScreen
+    emitToUser(captainUserId, 'trip:accepted', { tripId: trip._id.toString(), captain: null });
 
     notificationService.notify(passenger._id.toString(), {
       title: 'تم قبول رحلتك ✓',
       body: `الكابتن ${captain.userId?.name ?? ''} في طريقه إليك`,
       data: { type: 'trip:accepted', tripId: trip._id.toString() },
     }).catch(() => { });
+
+    // Compute and broadcast initial captain→pickup route asynchronously
+    _emitInitialRoute(trip._id.toString(), captain, trip.startLocation).catch((err) =>
+      logger.warn('[dispatch] Initial route failed (expanded):', err.message)
+    );
 
     console.log(`🔄 [DISPATCH] ✅ Trip ${trip._id} accepted (expanded radius) by ${captainUserId}`);
     return;
@@ -188,10 +306,10 @@ async function _dispatchLoop(trip, captains, passenger) {
   console.log(`🔄 [DISPATCH] ❌ No captain found for trip ${trip._id}`);
 
   const finalTrip = await tripRepo.findById(trip._id);
-  if (finalTrip?.status === 'searching') {
-    finalTrip.status = 'cancelled';
+  if (finalTrip?.status === 'searching' || finalTrip?.status === 'pending_captain') {
+    finalTrip.status = 'no_captain_found';
     finalTrip.cancellationReason = 'no_captain_found';
-    finalTrip.cancelledBy = null;
+    finalTrip.cancelledBy = 'system';
     finalTrip.cancelledAt = new Date();
     await tripRepo.saveDoc(finalTrip);
   }
@@ -203,6 +321,26 @@ async function _dispatchLoop(trip, captains, passenger) {
   logger.info(`[Trip Dispatch] ${trip._id} — no captain found`);
 }
 
+
+// Compute captain→pickup route and push it to the trip room.
+// Called async after acceptance so it doesn't block the dispatch loop.
+async function _emitInitialRoute(tripId, captain, startLocation) {
+  const captainCoords = captain.location?.coordinates; // GeoJSON [lng, lat]
+  if (!captainCoords || captainCoords.length < 2 || !startLocation?.lat) return;
+  const cLat = captainCoords[1];
+  const cLng = captainCoords[0];
+  const route = await getPolyline(cLat, cLng, startLocation.lat, startLocation.lng);
+  if (!route?.encodedPolyline) return;
+  const trip = await tripRepo.findById(tripId);
+  if (!trip || !['accepted', 'on_the_way', 'onTheWay'].includes(trip.status)) return;
+  trip.polyRoute = route.encodedPolyline;
+  trip.captainToPickupPolyline = route.encodedPolyline;
+  trip.currentPolyline = route.encodedPolyline;
+  trip.captainNotifiedAt = trip.captainNotifiedAt || new Date();
+  await tripRepo.saveDoc(trip);
+  emitToTrip(tripId, 'trip:route:update', { tripId, polyRoute: route.encodedPolyline });
+  logger.info(`[Trip] initial route emitted for trip ${tripId}`);
+}
 
 function _awaitCaptainResponse(captainUserId) {
   return new Promise((resolve, reject) => {
@@ -235,13 +373,56 @@ const captainRejected = (captainUserId) => {
 };
 
 // ── Passenger: create trip (direct — used for map-tap flow) ──────────
-const createTrip = async (passengerId, captainId, startLocation, carType = 'car') => {
+const createTrip = async (passengerId, captainId, startLocation, endLocation, carType = 'car') => {
+  // Prevent duplicate active trips for the same passenger.
+  const existing = await tripRepo.findOne({ passengerId, status: { $in: ACTIVE_STATUSES } });
+  if (existing) throw Object.assign(new Error('You already have an active trip'), { status: 409 });
+
   const captain = await captainRepo.findById(captainId);
   if (!captain || captain.status !== 'approved') throw new Error('Captain not available');
   if (!captain.isOnline) throw new Error('Captain is offline');
   if (captain.isOnTrip) throw new Error('Captain is already on a trip');
 
-  const trip = await tripRepo.create({ passengerId, captainId: captain._id, carType: carType || captain.vehicleType, startLocation });
+  const resolvedCarType = carType || captain.vehicleType;
+  const { firstKmFare, extraKmFare } = getFareConfig(resolvedCarType);
+
+  let polyRoute = '';
+  let distanceKm = 0;
+  let totalFare = 0;
+
+  if (endLocation?.lat && endLocation?.lng) {
+    try {
+      const route = await getPolyline(startLocation.lat, startLocation.lng, endLocation.lat, endLocation.lng);
+      polyRoute = route.encodedPolyline;
+      distanceKm = route.distanceKm;
+      totalFare = calcFareBreakdown(distanceKm, resolvedCarType).total;
+    } catch (err) {
+      logger.warn('[createTrip] Route polyline failed:', err.message);
+    }
+  }
+
+  const trip = await tripRepo.create({
+    passengerId, captainId: captain._id, carType: resolvedCarType,
+    startLocation,
+    endLocation: endLocation || undefined,
+    pickupLocation: {
+      lat: startLocation.lat,
+      lng: startLocation.lng,
+      address: startLocation.address || '',
+    },
+    dropoffLocation: endLocation?.lat ? {
+      lat: endLocation.lat,
+      lng: endLocation.lng,
+      address: endLocation.address || '',
+    } : undefined,
+    status: 'accepted',
+    searchStartedAt: new Date(),
+    polyRoute,
+    pickupToDestinationPolyline: polyRoute,
+    currentPolyline: polyRoute,
+    distanceKm, totalFare, firstKmFare, extraKmFare,
+    routeDistanceKm: distanceKm,
+  });
 
   // Resolve passenger name for the notification payload
   const passenger = await userRepo.findById(passengerId);
@@ -249,8 +430,15 @@ const createTrip = async (passengerId, captainId, startLocation, carType = 'car'
   // Notify captain — they are identified by their User._id on the socket
   emitToUser(captain.userId.toString(), 'trip:request:incoming', {
     tripId: trip._id.toString(),
-    passenger: { id: passengerId.toString(), name: passenger?.name, avatar: passenger?.avatar },
+    passenger: { id: passengerId.toString(), name: passenger?.name, avatar: passenger?.avatar, phone: passenger?.phone },
     startLocation,
+    endLocation: trip.endLocation,
+    carType: trip.carType,
+    polyRoute: trip.polyRoute,
+    distanceKm: trip.distanceKm,
+    totalFare: trip.totalFare,
+    firstKmFare: trip.firstKmFare,
+    extraKmFare: trip.extraKmFare,
   });
 
   notificationService.notify(captain.userId.toString(), {
@@ -272,8 +460,11 @@ const acceptTrip = async (tripId, captainUserId) => {
   if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
   if (!trip.canTransitionTo('accepted')) throw new Error(`Cannot accept from status: ${trip.status}`);
 
+  const now = new Date();
   trip.status = 'accepted';
-  trip.acceptedAt = new Date();
+  trip.acceptedAt = now;
+  trip.captainAcceptedAt = now;
+  trip.captainRespondedAt = now;
   await tripRepo.saveDoc(trip);
 
   await captainRepo.updateByUserId(captainUserId, { isOnTrip: true });
@@ -310,14 +501,50 @@ const _captainTransition = async (tripId, captainUserId, newStatus) => {
 
   const captain = await captainRepo.findByUserId(captainUserId);
   if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
+  if (trip.status === newStatus) return trip; // already in target state — idempotent
   if (!trip.canTransitionTo(newStatus)) throw new Error(`Cannot transition to ${newStatus} from ${trip.status}`);
 
-  const tsField = { onTheWay: 'onTheWayAt', arrived: 'arrivedAt', started: 'startedAt' }[newStatus];
+  const tsField = {
+    on_the_way: 'onTheWayAt', onTheWay: 'onTheWayAt',
+    arrived: 'arrivedAt',
+    started: 'startedAt', in_progress: 'startedAt',
+  }[newStatus];
   trip.status = newStatus;
   if (tsField) trip[tsField] = new Date();
+
+  // New extended timestamps
+  if (newStatus === 'arrived') {
+    trip.captainArrivedAt = new Date();
+    if (trip.pickupLocation) trip.pickupLocation.arrivedAt = new Date();
+    // Switch to pickup→destination polyline immediately when captain arrives so
+    // passenger sees the trip route rather than the now-irrelevant pickup route.
+    if (trip.pickupToDestinationPolyline) {
+      trip.currentPolyline = trip.pickupToDestinationPolyline;
+    }
+  }
+  if (newStatus === 'started' || newStatus === 'in_progress') {
+    trip.tripStartedAt = new Date();
+    if (trip.captainArrivedAt) {
+      trip.waitingTimeSeconds = Math.round((Date.now() - trip.captainArrivedAt.getTime()) / 1000);
+    }
+    // Ensure current display polyline is pickup→destination
+    if (trip.pickupToDestinationPolyline) {
+      trip.currentPolyline = trip.pickupToDestinationPolyline;
+    }
+  }
+
   await tripRepo.saveDoc(trip);
 
   emitToTrip(tripId, 'trip:status:update', { tripId, status: newStatus });
+
+  // Push the active polyline whenever the route switches phase so both apps
+  // redraw the map without needing a full trip fetch.
+  if (
+    (newStatus === 'arrived' || newStatus === 'started' || newStatus === 'in_progress') &&
+    trip.currentPolyline
+  ) {
+    emitToTrip(tripId, 'trip:route:update', { tripId, polyRoute: trip.currentPolyline });
+  }
 
   if (newStatus === 'arrived') {
     notificationService.notify(trip.passengerId, {
@@ -327,7 +554,7 @@ const _captainTransition = async (tripId, captainUserId, newStatus) => {
     }).catch(() => { });
   }
 
-  if (newStatus === 'started') {
+  if (newStatus === 'started' || newStatus === 'in_progress') {
     notificationService.notify(trip.passengerId, {
       title: 'انطلقت رحلتك 🚀',
       body: 'الكابتن بدأ الرحلة — استمتع بالرحلة',
@@ -339,30 +566,95 @@ const _captainTransition = async (tripId, captainUserId, newStatus) => {
   return trip;
 };
 
-const markOnTheWay = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'onTheWay');
+const markOnTheWay = async (tripId, captainUserId, captainLat, captainLng) => {
+  const trip = await _captainTransition(tripId, captainUserId, 'on_the_way');
+  trip.captainOnTheWayAt = trip.captainOnTheWayAt || new Date();
+
+  if (captainLat && captainLng && trip.startLocation?.lat) {
+    try {
+      const route = await getPolyline(
+        captainLat, captainLng,
+        trip.startLocation.lat, trip.startLocation.lng
+      );
+      if (route?.encodedPolyline) {
+        trip.polyRoute = route.encodedPolyline;
+        trip.captainToPickupPolyline = route.encodedPolyline;
+        trip.currentPolyline = route.encodedPolyline;
+        await tripRepo.saveDoc(trip);
+        emitToTrip(tripId, 'trip:route:update', {
+          tripId: tripId.toString(),
+          polyRoute: route.encodedPolyline,
+        });
+        return trip;
+      }
+    } catch (err) {
+      logger.warn('[markOnTheWay] polyRoute calc failed:', err.message);
+    }
+  }
+
+  await tripRepo.saveDoc(trip);
+  return trip;
+};
 const markArrived = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'arrived');
-const startTrip = (tripId, captainUserId) => _captainTransition(tripId, captainUserId, 'started');
+const startTrip   = async (tripId, captainUserId) => {
+  const trip = await _captainTransition(tripId, captainUserId, 'in_progress');
+  // If no pickup→destination polyline yet, compute it now
+  if (!trip.pickupToDestinationPolyline && trip.endLocation?.lat) {
+    try {
+      const route = await getPolyline(
+        trip.startLocation.lat, trip.startLocation.lng,
+        trip.endLocation.lat, trip.endLocation.lng
+      );
+      if (route?.encodedPolyline) {
+        trip.pickupToDestinationPolyline = route.encodedPolyline;
+        trip.currentPolyline = route.encodedPolyline;
+        trip.polyRoute = route.encodedPolyline;
+        if (!trip.routeDistanceKm) trip.routeDistanceKm = route.distanceKm;
+        await tripRepo.saveDoc(trip);
+        emitToTrip(tripId, 'trip:route:update', { tripId, polyRoute: route.encodedPolyline });
+      }
+    } catch (err) {
+      logger.warn('[startTrip] pickup→destination polyline failed:', err.message);
+    }
+  }
+  return trip;
+};
 
 // ── Captain: end trip ─────────────────────────────────────────────────
-const endTrip = async (tripId, captainUserId, distanceKm) => {
+const endTrip = async (tripId, captainUserId, clientDistanceKm) => {
   const trip = await tripRepo.findById(tripId);
   if (!trip) throw new Error('Trip not found');
 
   const captain = await captainRepo.findByUserId(captainUserId);
   if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
-  if (!trip.canTransitionTo('ended')) throw new Error(`Cannot end from status: ${trip.status}`);
+  if (!trip.canTransitionTo('completed') && !trip.canTransitionTo('ended'))
+    throw new Error(`Cannot end from status: ${trip.status}`);
 
-  const fare = calcFareBreakdown(distanceKm, trip.carType);
-  trip.status = 'ended';
-  trip.endedAt = new Date();
-  trip.distanceKm = distanceKm;
+  const now = new Date();
+  const gpsDistanceKm = clientDistanceKm || 0;
+  const finalDistance = trip.routeDistanceKm > 0
+    ? trip.routeDistanceKm
+    : (trip.distanceKm > 0 ? trip.distanceKm : gpsDistanceKm);
+
+  const fare = calcFareBreakdown(finalDistance, trip.carType);
+
+  trip.status = 'completed';
+  trip.endedAt = now;
+  trip.tripEndedAt = now;
+  trip.distanceKm = finalDistance;
   trip.totalFare = fare.total;
-  trip.fareBreakdown = fare;
+  trip.gpsDistanceKm = gpsDistanceKm;
+  if (trip.dropoffLocation) trip.dropoffLocation.arrivedAt = now;
+
+  if (trip.tripStartedAt) {
+    trip.travelTimeSeconds = Math.round((now.getTime() - trip.tripStartedAt.getTime()) / 1000);
+  }
+
   await tripRepo.saveDoc(trip);
 
   await captainRepo.updateByUserId(captainUserId, { isOnTrip: false, $inc: { totalTrips: 1 } });
 
-  emitToTrip(tripId, 'trip:status:update', { tripId, status: 'ended', fare });
+  emitToTrip(tripId, 'trip:status:update', { tripId, status: 'completed', fare });
 
   notificationService.notify(trip.passengerId, {
     title: 'وصلت! 🎉',
@@ -372,11 +664,11 @@ const endTrip = async (tripId, captainUserId, distanceKm) => {
 
   notificationService.notify(captainUserId, {
     title: 'انتهت الرحلة ✓',
-    body: `المبلغ: ${fare.total} ريال — ${distanceKm.toFixed(1)} كم`,
+    body: `المبلغ: ${fare.total} ريال — ${finalDistance.toFixed(1)} كم`,
     data: { type: 'trip:ended', tripId, fare: String(fare.total) },
   }).catch(() => { });
 
-  logger.info(`[Trip] ${tripId} ended | km=${distanceKm} | fare=${fare.total}`);
+  logger.info(`[Trip] ${tripId} completed | km=${finalDistance} | fare=${fare.total}`);
   return trip;
 };
 
@@ -407,28 +699,37 @@ const cancelTrip = async (tripId, userId, role, reason) => {
   const trip = await tripRepo.findById(tripId);
   if (!trip) throw new Error('Trip not found');
 
-  // ✅ أضف هذا الشرط أولاً - إذا كانت الرحلة ملغاة بالفعل
-  if (trip.status === 'cancelled') {
+  const cancelledStatuses = ['cancelled', 'cancelled_by_passenger', 'cancelled_by_captain', 'cancelled_by_system'];
+  if (cancelledStatuses.includes(trip.status)) {
     return { message: 'Trip already cancelled', alreadyCancelled: true };
   }
 
-  if (!trip.canTransitionTo('cancelled')) throw new Error('Cannot cancel trip in current state');
+  const newStatus = role === 'passenger' ? 'cancelled_by_passenger'
+    : role === 'captain' ? 'cancelled_by_captain'
+    : 'cancelled_by_system';
+
+  if (!trip.canTransitionTo(newStatus) && !trip.canTransitionTo('cancelled'))
+    throw new Error('Cannot cancel trip in current state');
 
   if (role === 'passenger') {
     if (trip.passengerId.toString() !== userId.toString()) throw new Error('Unauthorized');
   } else if (role === 'captain') {
     const captain = await captainRepo.findByUserId(userId);
     if (!captain || trip.captainId.toString() !== captain._id.toString()) throw new Error('Unauthorized');
-    await captainRepo.updateByUserId(userId, { isOnTrip: false });
   }
 
-  trip.status = 'cancelled';
+  trip.status = newStatus;
   trip.cancelledAt = new Date();
   trip.cancellationReason = reason || null;
   trip.cancelledBy = role;
   await tripRepo.saveDoc(trip);
 
-  emitToTrip(tripId, 'trip:cancelled', { tripId, reason: reason || null, cancelledBy: role });
+  // Free the captain regardless of who cancelled — passenger cancel was leaving isOnTrip: true.
+  if (trip.captainId) {
+    captainRepo.updateById(trip.captainId, { isOnTrip: false }).catch(() => {});
+  }
+
+  emitToTrip(tripId, 'trip:cancelled', { tripId, status: newStatus, reason: reason || null, cancelledBy: role });
 
   // Notify the OTHER party
   const otherPartyId = role === 'passenger'
@@ -453,7 +754,7 @@ const rateCaptain = async (tripId, passengerId, { rating, tags = [] }) => {
   if (!trip) throw Object.assign(new Error('Trip not found'), { status: 404 });
   if (trip.passengerId.toString() !== passengerId.toString())
     throw Object.assign(new Error('Unauthorized'), { status: 403 });
-  if (trip.status !== 'ended')
+  if (!['ended', 'completed'].includes(trip.status))
     throw Object.assign(new Error('Trip not ended'), { status: 400 });
   if (trip.passengerRating)
     throw Object.assign(new Error('Already rated'), { status: 409 });
@@ -482,7 +783,7 @@ const ratePassenger = async (tripId, captainUserId, { rating, tags = [] }) => {
   const captain = await captainRepo.findByUserId(captainUserId);
   if (!captain || trip.captainId.toString() !== captain._id.toString())
     throw Object.assign(new Error('Unauthorized'), { status: 403 });
-  if (trip.status !== 'ended')
+  if (!['ended', 'completed'].includes(trip.status))
     throw Object.assign(new Error('Trip not ended'), { status: 400 });
   if (trip.captainRating)
     throw Object.assign(new Error('Already rated'), { status: 409 });
@@ -493,6 +794,34 @@ const ratePassenger = async (tripId, captainUserId, { rating, tags = [] }) => {
 
   logger.info(`[Rating] trip=${tripId} passenger rated ${rating} by captain`);
   return trip;
+};
+
+// ── Captain moving: recalculate captain→pickup route ─────────────────
+// Called from captain.socket every ~300 m of movement so both sides see an updated polyline.
+const refreshRoute = async (tripId, captainLat, captainLng) => {
+  const trip = await tripRepo.findById(tripId);
+  if (!trip || !['accepted', 'on_the_way', 'onTheWay'].includes(trip.status)) return;
+  if (!trip.startLocation?.lat) return;
+  const route = await getPolyline(captainLat, captainLng, trip.startLocation.lat, trip.startLocation.lng);
+  if (!route?.encodedPolyline) return;
+  trip.polyRoute = route.encodedPolyline;
+  trip.captainToPickupPolyline = route.encodedPolyline;
+  trip.currentPolyline = route.encodedPolyline;
+  await tripRepo.saveDoc(trip);
+  emitToTrip(tripId, 'trip:route:update', { tripId, polyRoute: route.encodedPolyline });
+};
+
+// ── Persist captainLastLocation snapshot to trip doc ─────────────────
+// Called from captain.socket on every throttled location update.
+const updateCaptainLocation = async (tripId, lat, lng, heading = 0) => {
+  await tripRepo.findByIdAndUpdate(tripId, {
+    $set: {
+      'captainLastLocation.lat': lat,
+      'captainLastLocation.lng': lng,
+      'captainLastLocation.heading': heading,
+      'captainLastLocation.updatedAt': new Date(),
+    },
+  });
 };
 
 // ── GET /trips/current ────────────────────────────────────────────────
@@ -511,9 +840,29 @@ const getCurrentTrip = async (userId, role) => {
 const getTrip = (tripId) => tripRepo.findByIdPopulated(tripId);
 
 // ── POST /trips/estimate ──────────────────────────────────────────────
-const estimateFare = (startLat, startLng, endLat, endLng, carType = 'car') => {
-  const distanceKm = haversineDistance(startLat, startLng, endLat, endLng);
-  return { distanceKm: Math.round(distanceKm * 100) / 100, ...calcFareBreakdown(distanceKm, carType) };
+const estimateFare = async (startLat, startLng, endLat, endLng, carType = 'car') => {
+  try {
+    const route = await getPolyline(startLat, startLng, endLat, endLng);
+    const distanceKm = route.distanceKm;
+    const fare = calcFareBreakdown(distanceKm, carType);
+    return {
+      distanceKm: Math.round(distanceKm * 100) / 100,
+      durationMins: route.durationMins,
+      durationInTrafficMins: route.durationInTrafficMins,
+      encodedPolyline: route.encodedPolyline,
+      ...fare,
+    };
+  } catch (err) {
+    logger.warn('[estimateFare] Route failed, falling back to haversine:', err.message);
+    const distanceKm = haversineDistance(startLat, startLng, endLat, endLng);
+    return {
+      distanceKm: Math.round(distanceKm * 100) / 100,
+      durationMins: 0,
+      durationInTrafficMins: 0,
+      encodedPolyline: '',
+      ...calcFareBreakdown(distanceKm, carType),
+    };
+  }
 };
 
 module.exports = {
@@ -533,4 +882,6 @@ module.exports = {
   ratePassenger,
   getCurrentTrip,
   getTrip,
+  refreshRoute,
+  updateCaptainLocation,
 };
