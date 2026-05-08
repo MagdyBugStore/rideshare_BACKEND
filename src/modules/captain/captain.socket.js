@@ -107,6 +107,16 @@ const register = (io, socket) => {
       .catch((err) => logger.error('[Captain Socket] location DB write error', err));
   });
 
+  // ── Explicit offline (captain taps "go offline" in the app) ────────────
+  socket.on('captain:go:offline', async () => {
+    logger.info(`[Captain Socket] captain:go:offline received for ${userId}`);
+    if (_disconnectTimers.has(userId)) {
+      clearTimeout(_disconnectTimers.get(userId));
+      _disconnectTimers.delete(userId);
+    }
+    await _setOffline(io, userId, socket.data.captainId || captainId, socket);
+  });
+
   // ── Auto-offline on disconnect ──────────────────────────────────────────
   socket.on('disconnect', () => {
     logger.info(`[Captain Socket] disconnect event fired for ${userId}`);

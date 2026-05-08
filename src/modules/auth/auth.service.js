@@ -216,7 +216,7 @@ async function _sendOtpViaSms(phone, otp) {
   try {
     const twilio = require('twilio')(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
     await twilio.messages.create({
-      body: `كود التحقق لتاسك بدر: ${otp} — صالح لمدة 5 دقائق`,
+      body: `كود التحقق لتاكس بدر: ${otp} — صالح لمدة 5 دقائق`,
       from: env.TWILIO_PHONE,
       to: `+2${phone}`,
     });

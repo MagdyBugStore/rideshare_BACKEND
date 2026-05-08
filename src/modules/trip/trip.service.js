@@ -145,6 +145,7 @@ async function _dispatchLoop(trip, captains, passenger) {
       endLocation: trip.endLocation,
       carType: trip.carType,
       polyRoute: trip.polyRoute,
+      pickupToDestinationPolyline: trip.pickupToDestinationPolyline || trip.polyRoute,
       distanceKm: routeDist,       // pickup→destination route distance
       routeDistanceKm: routeDist,
       totalFare: trip.totalFare,
@@ -244,6 +245,7 @@ async function _dispatchLoop(trip, captains, passenger) {
       endLocation: trip.endLocation,
       carType: trip.carType,
       polyRoute: trip.polyRoute,
+      pickupToDestinationPolyline: trip.pickupToDestinationPolyline || trip.polyRoute,
       distanceKm: routeDistExp,       // pickup→destination route distance
       routeDistanceKm: routeDistExp,
       totalFare: trip.totalFare,
@@ -435,6 +437,7 @@ const createTrip = async (passengerId, captainId, startLocation, endLocation, ca
     endLocation: trip.endLocation,
     carType: trip.carType,
     polyRoute: trip.polyRoute,
+    pickupToDestinationPolyline: trip.pickupToDestinationPolyline || trip.polyRoute,
     distanceKm: trip.distanceKm,
     totalFare: trip.totalFare,
     firstKmFare: trip.firstKmFare,
