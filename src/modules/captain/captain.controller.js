@@ -10,7 +10,7 @@ const wrap = (fn) => async (req, res, next) => {
 // ── Registration / profile ────────────────────────────────────────────
 const applyCaptain = wrap(async (req, res) => {
   const userId = req.user.id;
-  const { vehicleType, vehicleModel, plateNumber, vehicleColor } = req.body;
+  const { vehicleType, vehicleModel, plateNumber, vehicleColor } = req.body || {};
 
   let captain = await captainRepo.findByUserId(userId);
 
@@ -27,31 +27,43 @@ const applyCaptain = wrap(async (req, res) => {
       plateNumber: plateNumber || undefined,
       vehicleColor: vehicleColor || undefined,
     });
-    return sendSuccess(res, {
-      code: captain.applicationCode,
-      status: captain.applicationStatus
-    }, 'Captain application created', 201);
+  } else {
+    if (vehicleType) captain.vehicleType = vehicleType;
+    if (vehicleModel) captain.vehicleModel = vehicleModel;
+    if (plateNumber) captain.plateNumber = plateNumber;
+    if (vehicleColor) captain.vehicleColor = vehicleColor;
+    await captainRepo.saveDoc(captain);
   }
 
-  if (vehicleType) captain.vehicleType = vehicleType;
-  if (vehicleModel) captain.vehicleModel = vehicleModel;
-  if (plateNumber) captain.plateNumber = plateNumber;
-  if (vehicleColor) captain.vehicleColor = vehicleColor;
-
-  await captainRepo.saveDoc(captain);
+  const stepsCompleted = _buildStepsCompleted(captain);
 
   sendSuccess(res, {
     code: captain.applicationCode,
-    status: captain.status,
-    vehicleInfoUpdated: true
-  }, 'Captain data updated');
+    status: captain.applicationStatus,
+    stepsCompleted,
+  }, 'Captain application processed', 201);
 });
 
 const checkApplicationStatus = wrap(async (req, res) => {
   const captain = await captainRepo.findByUserId(req.user.id);
   if (!captain) return sendError(res, 'No application found', 404);
-  sendSuccess(res, { code: captain.applicationCode, status: captain.applicationStatus });
+  sendSuccess(res, {
+    code: captain.applicationCode,
+    status: captain.applicationStatus,
+    stepsCompleted: _buildStepsCompleted(captain),
+  });
 });
+
+function _buildStepsCompleted(captain) {
+  return {
+    // nationalId (14-digit number) is required with validator; never empty if step 1 done
+    personal: !!(captain.documents?.nationalId && captain.documents?.governorate),
+    // plateNumber is required; vehicleColor is optional so excluded from check
+    vehicle: !!(captain.vehicleType && captain.vehicleModel && captain.plateNumber),
+    // driverLicense & vehicleLicense are required uploads in step 3
+    documents: !!(captain.documents?.driverLicense && captain.documents?.vehicleLicense),
+  };
+}
 
 const getStatus = wrap(async (req, res) => {
   const status = await captainService.getCaptainStatus(req.user.id);

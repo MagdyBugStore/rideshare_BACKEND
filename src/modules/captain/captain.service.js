@@ -65,10 +65,12 @@ const updatePersonal = async (userId, data) => {
   const captain = await captainRepo.findByUserId(userId);
   if (!captain) throw new Error('Captain not found');
   const { nationalId, address, governorate, dateOfBirth } = data;
+  if (!captain.documents) captain.documents = {};
   if (nationalId !== undefined) captain.documents.nationalId = nationalId;
   if (address !== undefined) captain.documents.address = address;
   if (governorate !== undefined) captain.documents.governorate = governorate;
   if (dateOfBirth !== undefined) captain.documents.dateOfBirth = dateOfBirth;
+  captain.markModified('documents');
   return captainRepo.saveDoc(captain);
 };
 
@@ -86,7 +88,9 @@ const updateVehicle = async (userId, data) => {
 const updateSingleDocument = async (userId, type, fileUrl) => {
   const captain = await captainRepo.findByUserId(userId);
   if (!captain) throw new Error('Captain not found');
+  if (!captain.documents) captain.documents = {};
   captain.documents[type] = fileUrl;
+  captain.markModified('documents');
   return captainRepo.saveDoc(captain);
 };
 
