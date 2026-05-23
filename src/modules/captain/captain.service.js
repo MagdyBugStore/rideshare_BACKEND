@@ -38,6 +38,7 @@ const approveCaptain = async (captainId) => {
   const captain = await captainRepo.findById(captainId);
   if (!captain) throw new Error('Captain not found');
   captain.status = 'approved';
+  captain.applicationStatus = 'approved';
   captain.rejectionReason = null;
   await captainRepo.saveDoc(captain);
   await userRepo.updateById(captain.userId, { role: 'captain' });
@@ -48,6 +49,7 @@ const rejectCaptain = async (captainId, reason) => {
   const captain = await captainRepo.findById(captainId);
   if (!captain) throw new Error('Captain not found');
   captain.status = 'rejected';
+  captain.applicationStatus = 'rejected';
   captain.rejectionReason = reason;
   return captainRepo.saveDoc(captain);
 };

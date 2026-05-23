@@ -53,7 +53,6 @@ const register = (io, socket) => {
     if (lat == null || lng == null) return;
 
     const cId = socket.data.captainId || captainId;
-    console.log(`📍 [CAPTAIN MOVING] captainId: ${cId} | lat: ${lat}, lng: ${lng}`);
     if (!cId) return;
 
     captainLocation = { lat, lng };
