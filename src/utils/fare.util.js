@@ -1,5 +1,5 @@
 const FARE_CONFIG = {
-  car:        { firstKmFare: 10, extraKmFare: 7,  commissionPct: 0.20 },
+  car:        { firstKmFare: 10, extraKmFare: 8,  commissionPct: 0.20 },
   motorcycle: { firstKmFare:  8, extraKmFare: 5,  commissionPct: 0.15 },
   tukutuk:    { firstKmFare:  7, extraKmFare: 4,  commissionPct: 0.15 },
   altTukutuk: { firstKmFare:  8, extraKmFare: 5,  commissionPct: 0.15 },
