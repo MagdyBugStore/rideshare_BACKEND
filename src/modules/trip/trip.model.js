@@ -33,7 +33,7 @@ const TRANSITIONS = {
   cancelled_by_passenger: [],
   cancelled_by_captain:   [],
   cancelled_by_system:    [],
-  no_captain_found:       [],
+  no_captain_found:       ['searching', 'cancelled', 'cancelled_by_passenger', 'cancelled_by_captain', 'cancelled_by_system'],
 };
 
 const tripSchema = new mongoose.Schema(

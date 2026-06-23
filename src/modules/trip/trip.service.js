@@ -19,6 +19,7 @@ const ACTIVE_STATUSES = [
 const DISPATCH_TIMEOUT_MS = 120000; // 2 minutes per captain
 const MAX_DISPATCH_ATTEMPTS = 5;   // max captains before giving up
 const EXPAND_RADIUS_KM = 10;       // expanded radius after initial failure
+const AUTO_RETRY_DELAY_MS = 20000; // 20 s before backend auto-retries dispatch
 
 // In-memory registry of pending dispatch promises
 // captainUserId → { resolve, reject, timer }
@@ -321,6 +322,29 @@ async function _dispatchLoop(trip, captains, passenger) {
   });
 
   logger.info(`[Trip Dispatch] ${trip._id} — no captain found`);
+
+  // Backend owns the retry pipeline — no mobile polling needed.
+  setTimeout(() => _autoRetryDispatch(trip._id.toString(), passenger), AUTO_RETRY_DELAY_MS);
+}
+
+async function _autoRetryDispatch(tripId, passenger) {
+  try {
+    const trip = await tripRepo.findById(tripId);
+    if (!trip || trip.status !== 'no_captain_found') return;
+    trip.status = 'searching';
+    trip.searchStartedAt = new Date();
+    trip.cancellationReason = undefined;
+    trip.cancelledBy = undefined;
+    trip.cancelledAt = undefined;
+    await tripRepo.saveDoc(trip);
+    const captains = await captainRepo.findNearby(trip.startLocation.lng, trip.startLocation.lat, 5, trip.carType);
+    logger.info(`[Trip Dispatch] ${tripId} — auto-retry, ${captains.length} captains nearby`);
+    _dispatchLoop(trip, captains, passenger).catch((err) =>
+      logger.error('[Trip Dispatch] unhandled error on auto-retry', err)
+    );
+  } catch (err) {
+    logger.error('[Trip Dispatch] auto-retry failed', err);
+  }
 }
 
 
